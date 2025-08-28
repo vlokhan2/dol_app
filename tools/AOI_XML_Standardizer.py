@@ -377,9 +377,24 @@ def main():
         
         tree = ET.parse(io.BytesIO(st.session_state.original_content))
         root = tree.getroot()
+        
+        # Get the main AOI name from TargetName attribute
+        target_name = root.get("TargetName")
+        if not target_name:
+            st.error("TargetName attribute not found in root element")
+            st.stop()
+            
+        # Find the main AOI definition
+        main_aoi = root.find(f".//AddOnInstructionDefinition[@Name='{target_name}']")
+        if main_aoi is None:
+            st.error(f"Main AOI '{target_name}' not found in AddOnInstructionDefinitions")
+            st.stop()
+
+        st.info(f"Processing main AOI: **{target_name}**")
 
         # Extract Parameters data
-        parameters = root.find(".//Parameters")
+        #parameters = root.find(".//Parameters")
+        parameters = main_aoi.find("Parameters")
         param_data = []
         if parameters is not None:
             for tag in parameters:
@@ -398,7 +413,7 @@ def main():
                 param_data.append(param_info)
 
         # Extract AOI Identity data
-        aoi = root.find(".//AddOnInstructionDefinition")
+        aoi = main_aoi
         aoi_data = []
         if aoi is not None:
             aoi_info = {
@@ -728,7 +743,7 @@ def main():
                     st.session_state.param_description_changes = {}
 
         with tabs[1]:  # Local Tags Editor Tab
-            localtags = root.find(".//LocalTags")
+            localtags = main_aoi.find("LocalTags")
             if localtags is not None:
                 local_tags_data = []
                 for tag in localtags:
@@ -1001,7 +1016,7 @@ def main():
 
         # --- NEW: Rung Comments Editor Tab --------------------------------------------
         with tabs[3]:
-            rungs_data = extract_rung_comments(root)
+            rungs_data = extract_rung_comments(main_aoi)
             if rungs_data:
                 df_rungs = pd.DataFrame(rungs_data)
 
