@@ -1,3 +1,10 @@
+## Table of Contents
+- [Available Tools](#available-tools)
+  - [AOI XML Standardizer](#1-aoi-xml-standardizer)
+  - [ME to SE convertor](#2-me-to-se-convertor)
+- [General Instructions](#general-instructions)
+- [Support & Contributions](#support--contributions)
+
 # DOL Tools Suite - Common Documentation
 
 Welcome to the DOL Tools Suite. This documentation provides an overview and usage guidelines for all available tools.

@@ -1,40 +1,15 @@
-# import streamlit as st
-# from tools import AOI_XML_Standardizer
-# from tools import ME_to_SE_Converter
-# from tools import ACM_HSL4_Attributes_Validator  # Import your new module here
-
-# TOOLS = {
-#     "AOI XML Standardizer": AOI_XML_Standardizer,
-#     "ME to SE Converter": ME_to_SE_Converter,
-#     "ACM Attributes Validator": ACM_HSL4_Attributes_Validator,  # Add the new tool here
-# }
-
-# tool_names = list(TOOLS.keys()) + ["Help / Documentation"]
-
-# st.sidebar.title("Select Tool")
-# selected_tool = st.sidebar.radio("Tools", tool_names)
-
-# if selected_tool == "Help / Documentation":
-#     try:
-#         with open("docs/help_doc.md", "r", encoding="utf-8") as f:
-#             help_text = f.read()
-#         st.markdown(help_text)
-#     except Exception as e:
-#         st.error(f"Unable to load help documentation: {e}")
-# else:
-#     tool_module = TOOLS[selected_tool]
-#     tool_module.main()
-
 import streamlit as st
 from tools import AOI_XML_Standardizer
 from tools import ME_to_SE_Converter
 from tools import ACM_HSL4_Attributes_Validator
+from tools import Naming_Conventions  # Import the new tool
 import base64
 
 TOOLS = {
     "AOI XML Standardizer": AOI_XML_Standardizer,
     "ME to SE Converter": ME_to_SE_Converter,
     "ACM Attributes Validator": ACM_HSL4_Attributes_Validator,
+    "Naming Conventions": Naming_Conventions,  # Add the new tool
 }
 
 tool_names = list(TOOLS.keys()) + ["Help / Documentation"]
@@ -52,7 +27,7 @@ def get_base64_image(image_path):
 st.set_page_config(page_title="Automation Tools Suite", layout="wide")
 
 # Add logo to sidebar
-logo_path = "res\logo.png"  # Adjust path to your logo file
+logo_path = r"res\logo.png"  # Adjust path to your logo file
 logo_base64 = get_base64_image(logo_path)
 if logo_base64:
     st.sidebar.markdown(
