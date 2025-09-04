@@ -256,7 +256,6 @@ def main():
         failure_reason = "; ".join(reasons) if reasons else ""
         return wrong, failure_reason
 
-    # --- NEW: Extract rung comments -------------------------------------------------
     def extract_rung_comments(root):
         """
         Return a list of dicts: Routine, RungNumber, RungType, RungText, Comment, LocalizedComment
@@ -295,7 +294,6 @@ def main():
                 })
         return data
 
-    # --- NEW: Update rung comments throughout XML (preserving CDATA) ---------------
     def update_rung_comments(xml_content, changes):
         """
         changes: iterable of dicts with keys:
@@ -369,7 +367,344 @@ def main():
 
         return updated.encode("utf-8"), total_changes, change_details
 
-    
+    # --- Faceplate Validation Functions ---
+    def parse_default_data_l5k(l5k_data):
+        """Extract the string value and length from L5K format."""
+        if not l5k_data:
+            return None, None
+        match = re.match(r"\[(\d+),'(.*?)\$00.*'\]", l5k_data.strip())
+        if match:
+            length = int(match.group(1))
+            value = match.group(2)
+            return length, value
+        return None, None
+
+    def validate_tag_data(tag):
+        """Validate DefaultData consistency for a LocalTag."""
+        reasons = []
+        tag_name = tag.get("Name")
+        data_type = tag.get("DataType")
+        
+        # Get both DefaultData elements
+        l5k_data = tag.find(".//DefaultData[@Format='L5K']")
+        string_data = tag.find(".//DefaultData[@Format='String']")
+        
+        if l5k_data is None or string_data is None:
+            return False, [f"Missing DefaultData for tag {tag_name}"], None
+        
+        l5k_text = l5k_data.text.strip() if l5k_data.text else ""
+        string_text = string_data.text.strip() if string_data.text else ""
+        string_length = int(string_data.get("Length", 0))
+        
+        # Parse L5K format
+        l5k_length, l5k_value = parse_default_data_l5k(l5k_text)
+        
+        if l5k_length is None or l5k_value is None:
+            return False, [f"Invalid L5K format for tag {tag_name}"], None
+        
+        # Validate consistency
+        wrong = False
+        if l5k_length != string_length:
+            reasons.append(f"Length mismatch for tag {tag_name}: L5K length={l5k_length}, String length={string_length}")
+            wrong = True
+        if l5k_value != string_text.strip("[]'"):
+            reasons.append(f"Value mismatch for tag {tag_name}: L5K value='{l5k_value}', String value='{string_text}'")
+            wrong = True
+        
+        return wrong, reasons, l5k_value
+
+    def validate_faceplate_name(inf_type_value, inf_lib_value, user_faceplate_name):
+        """Validate if the combined Inf_Type and Inf_Lib match the user-provided faceplate name."""
+        # Construct both possible faceplate names
+        derived_se_faceplate = f"({inf_lib_value}-SE) {inf_type_value}-Faceplate.gfx"
+        derived_me_faceplate = f"({inf_lib_value}-ME) {inf_type_value}-Faceplate.gfx"
+        
+        # Check if user-provided name matches either format
+        if user_faceplate_name in [derived_se_faceplate, derived_me_faceplate]:
+            return True, [], derived_se_faceplate if user_faceplate_name == derived_se_faceplate else derived_me_faceplate
+        
+        # Return error with both expected formats
+        reasons = [f"Faceplate name mismatch: Expected '({inf_lib_value}-SE) {inf_type_value}-Faceplate.gfx' or '({inf_lib_value}-ME) {inf_type_value}-Faceplate.gfx', got '{user_faceplate_name}'"]
+        return False, reasons, derived_se_faceplate
+
+    def faceplate_validation_tab(local_tags_data):
+        """Streamlit tab for validating DefaultData and faceplate names using local_tags_data."""
+        st.markdown("### Inf_Type, Inf_Lib Data Validation")
+        st.markdown("**Instructions:** Enter the expected faceplate name and validate the `Inf_Type` and `Inf_Lib` tag data.")
+        
+        # User input for faceplate name
+        user_faceplate_name = st.text_input("Enter Expected SE/ME Faceplate Name", placeholder="e.g., (raC-4_00-SE) raC_Dvc_E300-Faceplate.gfx", key="faceplate_name_input")
+        
+        # Convert local_tags_data to DataFrame if not already
+        df_localtags = pd.DataFrame(local_tags_data) if local_tags_data else pd.DataFrame()
+        
+        if df_localtags.empty:
+            st.error("No LocalTags found in XML")
+            return
+        
+        # Find Inf_Type and Inf_Lib tags
+        inf_type_row = df_localtags[df_localtags["Name"] == "Inf_Type"]
+        inf_lib_row = df_localtags[df_localtags["Name"] == "Inf_Lib"]
+        
+        if inf_type_row.empty or inf_lib_row.empty:
+            st.error("Required tags Inf_Type or Inf_Lib not found in LocalTags")
+            return
+        
+        # Get the XML tag elements from local_tags_data
+        inf_type_tag = None
+        inf_lib_tag = None
+        for tag_info in local_tags_data:
+            if tag_info["Name"] == "Inf_Type":
+                inf_type_tag = tag_info["Tag"]
+            elif tag_info["Name"] == "Inf_Lib":
+                inf_lib_tag = tag_info["Tag"]
+        
+        # Validate DefaultData for both tags
+        st.subheader("DefaultData Validation")
+        tag_results = []
+        for tag in [inf_type_tag, inf_lib_tag]:
+            if tag is None:
+                continue
+            wrong, reasons, value = validate_tag_data(tag)
+            tag_name = tag.get("Name")
+            tag_results.append({
+                "Tag Name": tag_name,
+                "Status": "❌" if wrong else "✅",
+                "Value": value if value else "N/A",
+                "Issues": "; ".join(reasons) if reasons else "Valid"
+            })
+            if wrong:
+                st.warning(f"Validation failed for tag {tag_name}:")
+                for reason in reasons:
+                    st.write(f"- {reason}")
+            else:
+                st.success(f"Tag {tag_name} DefaultData is valid: {value}")
+        
+        # Display tag validation results
+        st.markdown("#### Tag Validation Summary")
+        st.dataframe(pd.DataFrame(tag_results), use_container_width=True, hide_index=True)
+        
+        # Validate faceplate name if user provided one
+        if user_faceplate_name:
+            st.subheader("Faceplate Name Validation")
+            _, _, inf_type_value = validate_tag_data(inf_type_tag) if inf_type_tag else (False, [], None)
+            _, _, inf_lib_value = validate_tag_data(inf_lib_tag) if inf_lib_tag else (False, [], None)
+            if inf_type_value and inf_lib_value:
+                is_valid, fp_reasons, derived_faceplate_name = validate_faceplate_name(inf_type_value, inf_lib_value, user_faceplate_name)
+                if is_valid:
+                    st.success(f"Faceplate name is valid: {derived_faceplate_name}")
+                else:
+                    st.warning(f"Faceplate name validation failed:")
+                    for reason in fp_reasons:
+                        st.write(f"- {reason}")
+                
+                # Store results in session state
+                st.session_state.faceplate_validation = {
+                    "inf_type_value": inf_type_value,
+                    "inf_lib_value": inf_lib_value,
+                    "derived_faceplate_name": derived_faceplate_name,
+                    "user_faceplate_name": user_faceplate_name,
+                    "is_valid": is_valid,
+                    "reasons": fp_reasons
+                }
+            else:
+                st.error("Cannot validate faceplate name: Invalid tag data")
+        else:
+            st.info("Enter a faceplate name to validate.")
+
+    # Helper functions for Parameters
+    def clean_prefix(prefix, name):
+        known_prefixes = ["Cmd_", "Cfg_", "Set_", "Sts_", "Val_", "Sts_b"]
+        usage_substrings = ["Inp_", "Out_", "Val_", "Sts_", "Cmd_", "Cfg_", "Set_"]
+        for pfx in known_prefixes:
+            if name.startswith(pfx):
+                name = name[len(pfx):]
+                break
+        for sub in usage_substrings:
+            if name.startswith(sub):
+                name = name[len(sub):]
+                break
+        name_clean = name.replace("_", "")
+        prefix_clean = prefix.rstrip("_")
+        return prefix_clean + "_" + name_clean
+
+    def is_boolean_alias(row):
+        alias_for = row.get("AliasFor", "")
+        if alias_for and '.' in alias_for:
+            bit_suffix = alias_for.split('.')[-1]
+            if bit_suffix.isdigit():
+                return True
+        return False
+
+    exceptions_ref_names = {
+        "Ref_Ctrl_Inf",
+        "Ref_Ctrl_Set",
+        "Ref_Ctrl_Cmd",
+        "Ref_Ctrl_Sts",
+        "Ref_Ctrl_Itf",
+        "Inf_Lookup"
+    }
+
+    def clean_ref_prefix(name):
+        if name in exceptions_ref_names:
+            return name
+        name_no_underscore = name.replace("_", "")
+        if name_no_underscore.startswith("Ref"):
+            return "Ref_" + name_no_underscore[3:]
+        else:
+            return "Ref_" + name_no_underscore
+
+    def suggest_parameter_name(row):
+        reasons = []
+        original_name = row.get("Name", "")
+        usage = row.get("Usage", "")
+        dtype = row.get("DataType")
+        tagtype = row.get("TagType", "")
+        required = str(row.get("Required", "")).lower() == "true"
+        visible = str(row.get("Visible", "")).lower() == "true"
+        external = row.get("ExternalAccess", None)
+        description = row.get("Description", "")
+
+        if is_system_parameter(original_name):
+            return original_name, False, ""
+
+        if is_rac_dvc_parameter(original_name):
+            if dtype != "BOOL":
+                reasons.append("DataType must be BOOL for raC_Dvc_ parameters")
+            if usage not in ["Input", "Output"]:
+                reasons.append("Usage must be Input or Output for raC_Dvc_ parameters")
+            if not description:
+                reasons.append("Description is required for raC_Dvc_ parameters")
+            
+            wrong = len(reasons) > 0
+            failure_reason = "; ".join(reasons) if reasons else ""
+            return original_name, wrong, failure_reason
+
+        effective_dtype = dtype
+        if tagtype == "Alias":
+            if is_boolean_alias(row):
+                effective_dtype = "BOOL"
+            else:
+                effective_dtype = "NON-BOOL"
+        elif tagtype == "Base":
+            effective_dtype = dtype
+
+        suggestion = original_name
+        wrong = False
+
+        if usage == "InOut":
+            expected_name = clean_ref_prefix(original_name)
+            if original_name not in exceptions_ref_names:
+                if not original_name.startswith("Ref_"):
+                    reasons.append("Name prefix missing 'Ref_'")
+                    suggestion = expected_name
+                    wrong = True
+                elif original_name != expected_name:
+                    reasons.append("Name format incorrect for InOut")
+                    suggestion = expected_name
+                    wrong = True
+            else:
+                # For exception names like Inf_Lookup, only check if the format matches expected_name
+                if original_name != expected_name:
+                    reasons.append("Name format incorrect for InOut exception")
+                    suggestion = expected_name
+                    wrong = True
+
+            if not required:
+                reasons.append("Required is not true")
+                wrong = True
+            if not visible:
+                reasons.append("Visible is not true")
+                wrong = True
+            if not pd.isna(external) and external != '':
+                reasons.append("ExternalAccess not None")
+                wrong = True
+
+        elif usage == "Input":
+            if effective_dtype == "BOOL":
+                if not original_name.startswith("Cmd_"):
+                    reasons.append("Input BOOL name missing 'Cmd_' prefix")
+                    suggestion = clean_prefix("Cmd_", original_name)
+                    wrong = True
+            else:
+                if not (original_name.startswith("Cfg_") or original_name.startswith("Set_")):
+                    reasons.append("Input non-BOOL name missing 'Cfg_' or 'Set_' prefix")
+                    suggestion = clean_prefix("Cfg_", original_name)
+                    wrong = True
+
+        elif usage == "Output":
+            if effective_dtype == "BOOL":
+                if not original_name.startswith("Sts_"):
+                    reasons.append("Output BOOL name missing 'Sts_' prefix")
+                    suggestion = clean_prefix("Sts_", original_name)
+                    wrong = True
+            else:
+                if not (original_name.startswith("Val_") or original_name.startswith("Sts_b") or original_name.startswith("Sts_e")):
+                    reasons.append("Output non-BOOL name missing 'Val_', 'Sts_b' or 'Sts_e' prefix")
+                    suggestion = clean_prefix("Val_", original_name)
+                    wrong = True
+
+        if suggestion.count("_") != 1 and suggestion not in exceptions_ref_names:
+            reasons.append("Suggested name does not have exactly one underscore")
+            parts = suggestion.split("_")
+            if len(parts) > 1:
+                suggestion = f"{parts[0]}_{''.join(parts[1:])}"
+            wrong = True
+
+        failure_reason = "; ".join(reasons) if reasons else ""
+        return suggestion, wrong, failure_reason
+
+    def suggest_local_tag_name(row):
+        reasons = []
+        original_name = row.get("Name", "")
+        external_access = row.get("ExternalAccess", "None")
+        dtype = row.get("DataType", "")
+
+        if original_name.startswith(("HMI_", "Inf_")):
+            return original_name, False, ""
+
+        suggestion = original_name
+        wrong = False
+
+        if external_access in ["Read Only", "Read/Write"]:
+            if external_access == "Read Only":
+                if dtype == "BOOL":
+                    if not original_name.startswith("Sts_"):
+                        reasons.append("BOOL tag with Read Only ExternalAccess should start with 'Sts_' and move this to Output Parameter")
+                        suggestion = clean_prefix("Sts_", original_name)
+                        wrong = True
+                else:
+                    if not (original_name.startswith("Val_") or original_name.startswith("Sts_e") or original_name.startswith("Sts_t")):
+                        reasons.append("Non-BOOL tag with Read Only ExternalAccess should start with 'Val_', 'Sts_e', or 'Sts_t'")
+                        suggestion = clean_prefix("Val_", original_name)
+                        wrong = True
+            elif external_access == "Read/Write":
+                if dtype == "BOOL":
+                    if not original_name.startswith("Cmd_"):
+                        reasons.append("BOOL tag with Read/Write ExternalAccess should start with 'Cmd_' and move this to Input Parameter")
+                        suggestion = clean_prefix("Cmd_", original_name)
+                        wrong = True
+                else:
+                    if not (original_name.startswith("Set_") or original_name.startswith("Cfg_")):
+                        reasons.append("Non-BOOL tag with Read/Write ExternalAccess should start with 'Set_' or 'Cfg_' or if it is a non UDT tag move this to input parameter")
+                        suggestion = clean_prefix("Set_", original_name)
+                        wrong = True
+        elif external_access == "None":
+            if not original_name.startswith("Wrk_"):
+                reasons.append("Tag with None ExternalAccess should start with 'Wrk_'")
+                suggestion = clean_prefix("Wrk_", original_name)
+                wrong = True
+
+        if suggestion.count("_") != 1:
+            reasons.append("Suggested name does not have exactly one underscore")
+            parts = suggestion.split("_")
+            if len(parts) > 1:
+                suggestion = f"{parts[0]}_{''.join(parts[1:])}"
+            wrong = True
+
+        failure_reason = "; ".join(reasons) if reasons else ""
+        return suggestion, wrong, failure_reason
+
     uploaded_file = st.file_uploader("Upload Unlocked AOI .L5X (XML) file", type="L5X")
     if uploaded_file:
         if 'original_content' not in st.session_state:
@@ -393,7 +728,6 @@ def main():
         st.info(f"Processing main AOI: **{target_name}**")
 
         # Extract Parameters data
-        #parameters = root.find(".//Parameters")
         parameters = main_aoi.find("Parameters")
         param_data = []
         if parameters is not None:
@@ -437,193 +771,45 @@ def main():
                 aoi_info["LocalizedDescription"] = loc_desc_element.text.strip()
             
             rev_note_element = aoi.find("RevisionNote")
-            if rev_note_element is not None and rev_note_element.text is not None:
+            if rev_note_element is None or rev_note_element.text is None:
+                aoi_info["RevisionNote"] = ""
+            else:
                 aoi_info["RevisionNote"] = rev_note_element.text.strip()
             
             loc_rev_note_element = aoi.find("LocalizedRevisionNote[@Lang='en-US']")
-            if loc_rev_note_element is not None and loc_rev_note_element.text is not None:
+            if loc_rev_note_element is None or loc_rev_note_element.text is None:
+                aoi_info["LocalizedRevisionNote"] = ""
+            else:
                 aoi_info["LocalizedRevisionNote"] = loc_rev_note_element.text.strip()
             
             help_text_element = aoi.find("AdditionalHelpText")
-            if help_text_element is not None and help_text_element.text is not None:
+            if help_text_element is None or help_text_element.text is None:
+                aoi_info["AdditionalHelpText"] = ""
+            else:
                 aoi_info["AdditionalHelpText"] = help_text_element.text.strip()
             
             aoi_data.append(aoi_info)
 
-        # Helper functions for Parameters
-        def clean_prefix(prefix, name):
-            known_prefixes = ["Cmd_", "Cfg_", "Set_", "Sts_", "Val_", "Sts_b"]
-            usage_substrings = ["Inp_", "Out_", "Val_", "Sts_", "Cmd_", "Cfg_", "Set_"]
-            for pfx in known_prefixes:
-                if name.startswith(pfx):
-                    name = name[len(pfx):]
-                    break
-            for sub in usage_substrings:
-                if name.startswith(sub):
-                    name = name[len(sub):]
-                    break
-            name_clean = name.replace("_", "")
-            prefix_clean = prefix.rstrip("_")
-            return prefix_clean + "_" + name_clean
+        # Extract LocalTags data (to be reused in Faceplate Validator)
+        localtags = main_aoi.find("LocalTags")
+        local_tags_data = []
+        if localtags is not None:
+            for tag in localtags:
+                tag_info = {**{"Tag": tag}, **tag.attrib}  # Store the ET.Element as 'Tag'
+                desc_element = tag.find('Description')
+                description = ""
+                if desc_element is not None:
+                    if desc_element.text is not None and desc_element.text.strip():
+                        description = desc_element.text.strip()
+                    else:
+                        localized_desc = desc_element.find("LocalizedDescription[@Lang='en-US']")
+                        if localized_desc is not None and localized_desc.text is not None:
+                            description = localized_desc.text.strip()
+                tag_info["Description"] = description
+                local_tags_data.append(tag_info)
 
-        def is_boolean_alias(row):
-            alias_for = row.get("AliasFor", "")
-            if alias_for and '.' in alias_for:
-                bit_suffix = alias_for.split('.')[-1]
-                if bit_suffix.isdigit():
-                    return True
-            return False
-
-        exceptions_ref_names = {
-            "Ref_Ctrl_Inf",
-            "Ref_Ctrl_Set",
-            "Ref_Ctrl_Cmd",
-            "Ref_Ctrl_Sts"
-        }
-
-        def clean_ref_prefix(name):
-            if name in exceptions_ref_names:
-                return name
-            name_no_underscore = name.replace("_", "")
-            if name_no_underscore.startswith("Ref"):
-                return "Ref_" + name_no_underscore[3:]
-            else:
-                return "Ref_" + name_no_underscore
-
-        def suggest_parameter_name(row):
-            reasons = []
-            original_name = row.get("Name", "")
-            usage = row.get("Usage", "")
-            dtype = row.get("DataType")
-            tagtype = row.get("TagType", "")
-            required = str(row.get("Required", "")).lower() == "true"
-            visible = str(row.get("Visible", "")).lower() == "true"
-            external = row.get("ExternalAccess", None)
-            description = row.get("Description", "")
-
-            if is_system_parameter(original_name):
-                return original_name, False, ""
-
-            if is_rac_dvc_parameter(original_name):
-                if dtype != "BOOL":
-                    reasons.append("DataType must be BOOL for raC_Dvc_ parameters")
-                if usage not in ["Input", "Output"]:
-                    reasons.append("Usage must be Input or Output for raC_Dvc_ parameters")
-                if not description:
-                    reasons.append("Description is required for raC_Dvc_ parameters")
-                
-                wrong = len(reasons) > 0
-                failure_reason = "; ".join(reasons) if reasons else ""
-                return original_name, wrong, failure_reason
-
-            effective_dtype = dtype
-            if tagtype == "Alias":
-                if is_boolean_alias(row):
-                    effective_dtype = "BOOL"
-                else:
-                    effective_dtype = "NON-BOOL"
-            elif tagtype == "Base":
-                effective_dtype = dtype
-
-            suggestion = original_name
-            wrong = False
-
-            if usage == "InOut":
-                expected_name = clean_ref_prefix(original_name)
-                if not original_name.startswith("Ref_"):
-                    reasons.append("Name prefix missing 'Ref_'")
-                    suggestion = expected_name
-                    wrong = True
-                elif original_name not in exceptions_ref_names and original_name != expected_name:
-                    reasons.append("Name format incorrect for InOut")
-                    suggestion = expected_name
-                    wrong = True
-
-                if not required:
-                    reasons.append("Required is not true")
-                    wrong = True
-                if not visible:
-                    reasons.append("Visible is not true")
-                    wrong = True
-                if not pd.isna(external) and external != '':
-                    reasons.append("ExternalAccess not None")
-                    wrong = True
-
-            elif usage == "Input":
-                if effective_dtype == "BOOL":
-                    if not original_name.startswith("Cmd_"):
-                        reasons.append("Input BOOL name missing 'Cmd_' prefix")
-                        suggestion = clean_prefix("Cmd_", original_name)
-                        wrong = True
-                else:
-                    if not (original_name.startswith("Cfg_") or original_name.startswith("Set_")):
-                        reasons.append("Input non-BOOL name missing 'Cfg_' or 'Set_' prefix")
-                        suggestion = clean_prefix("Cfg_", original_name)
-                        wrong = True
-
-            elif usage == "Output":
-                if effective_dtype == "BOOL":
-                    if not original_name.startswith("Sts_"):
-                        reasons.append("Output BOOL name missing 'Sts_' prefix")
-                        suggestion = clean_prefix("Sts_", original_name)
-                        wrong = True
-                else:
-                    if not (original_name.startswith("Val_") or original_name.startswith("Sts_b") or original_name.startswith("Sts_e")):
-                        reasons.append("Output non-BOOL name missing 'Val_', 'Sts_b' or 'Sts_e' prefix")
-                        suggestion = clean_prefix("Val_", original_name)
-                        wrong = True
-
-            if suggestion.count("_") != 1 and suggestion not in exceptions_ref_names:
-                reasons.append("Suggested name does not have exactly one underscore")
-                parts = suggestion.split("_")
-                if len(parts) > 1:
-                    suggestion = f"{parts[0]}_{''.join(parts[1:])}"
-                wrong = True
-
-            failure_reason = "; ".join(reasons) if reasons else ""
-            return suggestion, wrong, failure_reason
-
-        # Helper functions for Local Tags
-        def suggest_local_tag_name(row):
-            reasons = []
-            original_name = row.get("Name", "")
-            external_access = row.get("ExternalAccess", "None")
-            dtype = row.get("DataType", "")
-
-            if original_name.startswith(("HMI_", "Inf_")):
-                return original_name, False, ""
-
-            suggestion = original_name
-            wrong = False
-
-            if external_access in ["Read Only", "Read/Write"]:
-                if dtype == "BOOL":
-                    if not original_name.startswith("Sts_"):
-                        reasons.append("BOOL tag with Read Only or Read/Write ExternalAccess should start with 'Sts_'")
-                        suggestion = clean_prefix("Sts_", original_name)
-                        wrong = True
-                else:
-                    if not original_name.startswith("Val_"):
-                        reasons.append("Non-BOOL tag with Read Only or Read/Write ExternalAccess should start with 'Val_'")
-                        suggestion = clean_prefix("Val_", original_name)
-                        wrong = True
-            elif external_access == "None":
-                if not original_name.startswith("Wrk_"):
-                    reasons.append("Tag with None ExternalAccess should start with 'Wrk_'")
-                    suggestion = clean_prefix("Wrk_", original_name)
-                    wrong = True
-
-            if suggestion.count("_") != 1:
-                reasons.append("Suggested name does not have exactly one underscore")
-                parts = suggestion.split("_")
-                if len(parts) > 1:
-                    suggestion = f"{parts[0]}_{''.join(parts[1:])}"
-                wrong = True
-
-            failure_reason = "; ".join(reasons) if reasons else ""
-            return suggestion, wrong, failure_reason
-
-        tabs = st.tabs(["Parameters Editor", "Local Tags Editor", "AOI Identity Editor","Rung Comments Editor", "Download Updated File"])
+        # Update tabs to include Faceplate Validator
+        tabs = st.tabs(["Parameters Editor", "Local Tags Editor", "AOI Identity Editor", "Rung Comments Editor", "Inf Data Validator", "Download Updated File"])
 
         with tabs[0]:  # Parameters Editor Tab
             if param_data:
@@ -743,134 +929,117 @@ def main():
                     st.session_state.param_description_changes = {}
 
         with tabs[1]:  # Local Tags Editor Tab
-            localtags = main_aoi.find("LocalTags")
-            if localtags is not None:
-                local_tags_data = []
-                for tag in localtags:
-                    tag_info = {**{"Tag": tag.tag}, **tag.attrib}
-                    desc_element = tag.find('Description')
-                    description = ""
-                    if desc_element is not None:
-                        if desc_element.text is not None and desc_element.text.strip():
-                            description = desc_element.text.strip()
-                        else:
-                            localized_desc = desc_element.find("LocalizedDescription[@Lang='en-US']")
-                            if localized_desc is not None and localized_desc.text is not None:
-                                description = localized_desc.text.strip()
-                    tag_info["Description"] = description
-                    local_tags_data.append(tag_info)
+            if local_tags_data:
+                df_localtags = pd.DataFrame(local_tags_data)
+                results = df_localtags.apply(suggest_local_tag_name, axis=1)
+                df_localtags["SuggestedName"] = [r[0] for r in results]
+                df_localtags["NamingIssue"] = [r[1] for r in results]
+                df_localtags["FailureReasons"] = [r[2] for r in results]
 
-                if local_tags_data:
-                    df_localtags = pd.DataFrame(local_tags_data)
-                    results = df_localtags.apply(suggest_local_tag_name, axis=1)
-                    df_localtags["SuggestedName"] = [r[0] for r in results]
-                    df_localtags["NamingIssue"] = [r[1] for r in results]
-                    df_localtags["FailureReasons"] = [r[2] for r in results]
+                st.markdown("### Local Tags Naming Check and Editor")
+                st.markdown("**Instructions:** Review the suggested names and descriptions below. You can edit the 'SuggestedName' and 'Description' columns directly. Red rows indicate naming issues.")
+                
+                edit_columns = ["Name", "DataType", "ExternalAccess", "Description", "SuggestedName", "FailureReasons"]
+                display_df = df_localtags[edit_columns].copy()
+                display_df["🚨"] = df_localtags["NamingIssue"].apply(lambda x: "❌" if x else "✅")
+                cols = ["🚨"] + edit_columns
+                display_df = display_df[cols]
+                
+                edited_df = st.data_editor(
+                    display_df,
+                    disabled=["🚨", "Name", "DataType", "ExternalAccess", "FailureReasons"],
+                    column_config={
+                        "🚨": st.column_config.TextColumn(
+                            "Status",
+                            help="❌ = Has naming issues, ✅ = Follows naming rules",
+                            width="small"
+                        ),
+                        "SuggestedName": st.column_config.TextColumn(
+                            "Suggested Name (Editable)",
+                            help="Edit this field to change the suggested tag name",
+                            max_chars=50,
+                            width="medium"
+                        ),
+                        "Description": st.column_config.TextColumn(
+                            "Description (Editable)",
+                            help="Edit this field to update the tag description",
+                            max_chars=200,
+                            width="large"
+                        ),
+                        "FailureReasons": st.column_config.TextColumn(
+                            "Issue Details",
+                            help="Specific reasons for naming issues",
+                            width="large"
+                        ),
+                        "Name": st.column_config.TextColumn(
+                            "Current Name",
+                            width="medium"
+                        ),
+                        "DataType": st.column_config.TextColumn(
+                            "Data Type",
+                            width="small"
+                        ),
+                        "ExternalAccess": st.column_config.TextColumn(
+                            "External Access",
+                            width="small"
+                        ),
+                    },
+                    use_container_width=True,
+                    height=600,
+                    key="localtag_editor",
+                    hide_index=True
+                )
+                
+                edited_df = edited_df.drop("🚨", axis=1)
+                edited_df["NamingIssue"] = df_localtags["NamingIssue"].values
 
-                    st.markdown("### Local Tags Naming Check and Editor")
-                    st.markdown("**Instructions:** Review the suggested names and descriptions below. You can edit the 'SuggestedName' and 'Description' columns directly. Red rows indicate naming issues.")
-                    
-                    edit_columns = ["Name", "DataType", "ExternalAccess", "Description", "SuggestedName", "FailureReasons"]
-                    display_df = df_localtags[edit_columns].copy()
-                    display_df["🚨"] = df_localtags["NamingIssue"].apply(lambda x: "❌" if x else "✅")
-                    cols = ["🚨"] + edit_columns
-                    display_df = display_df[cols]
-                    
-                    edited_df = st.data_editor(
-                        display_df,
-                        disabled=["🚨", "Name", "DataType", "ExternalAccess", "FailureReasons"],
-                        column_config={
-                            "🚨": st.column_config.TextColumn(
-                                "Status",
-                                help="❌ = Has naming issues, ✅ = Follows naming rules",
-                                width="small"
-                            ),
-                            "SuggestedName": st.column_config.TextColumn(
-                                "Suggested Name (Editable)",
-                                help="Edit this field to change the suggested tag name",
-                                max_chars=50,
-                                width="medium"
-                            ),
-                            "Description": st.column_config.TextColumn(
-                                "Description (Editable)",
-                                help="Edit this field to update the tag description",
-                                max_chars=200,
-                                width="large"
-                            ),
-                            "FailureReasons": st.column_config.TextColumn(
-                                "Issue Details",
-                                help="Specific reasons for naming issues",
-                                width="large"
-                            ),
-                            "Name": st.column_config.TextColumn(
-                                "Current Name",
-                                width="medium"
-                            ),
-                            "DataType": st.column_config.TextColumn(
-                                "Data Type",
-                                width="small"
-                            ),
-                            "ExternalAccess": st.column_config.TextColumn(
-                                "External Access",
-                                width="small"
-                            ),
-                        },
-                        use_container_width=True,
-                        height=600,
-                        key="localtag_editor",
-                        hide_index=True
-                    )
-                    
-                    edited_df = edited_df.drop("🚨", axis=1)
-                    edited_df["NamingIssue"] = df_localtags["NamingIssue"].values
+                issues_count = edited_df["NamingIssue"].sum()
+                name_changes_count = (edited_df["SuggestedName"] != edited_df["Name"]).sum()
+                desc_changes_count = (edited_df["Description"] != df_localtags["Description"]).sum()
+                total_changes_count = name_changes_count + desc_changes_count
+                
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Total Local Tags", len(edited_df))
+                with col2:
+                    st.metric("Naming Issues", issues_count)
+                with col3:
+                    st.metric("Name Changes", name_changes_count)
+                with col4:
+                    st.metric("Description Changes", desc_changes_count)
 
-                    issues_count = edited_df["NamingIssue"].sum()
-                    name_changes_count = (edited_df["SuggestedName"] != edited_df["Name"]).sum()
-                    desc_changes_count = (edited_df["Description"] != df_localtags["Description"]).sum()
-                    total_changes_count = name_changes_count + desc_changes_count
+                if total_changes_count > 0:
+                    st.markdown("### Proposed Changes")
+                    if name_changes_count > 0:
+                        st.markdown("#### Local Tag Name Changes")
+                        name_changes_df = edited_df[edited_df["SuggestedName"] != edited_df["Name"]][["Name", "SuggestedName", "ExternalAccess"]]
+                        st.dataframe(name_changes_df, use_container_width=True)
                     
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Total Local Tags", len(edited_df))
-                    with col2:
-                        st.metric("Naming Issues", issues_count)
-                    with col3:
-                        st.metric("Name Changes", name_changes_count)
-                    with col4:
-                        st.metric("Description Changes", desc_changes_count)
-
-                    if total_changes_count > 0:
-                        st.markdown("### Proposed Changes")
-                        if name_changes_count > 0:
-                            st.markdown("#### Local Tag Name Changes")
-                            name_changes_df = edited_df[edited_df["SuggestedName"] != edited_df["Name"]][["Name", "SuggestedName", "ExternalAccess"]]
-                            st.dataframe(name_changes_df, use_container_width=True)
-                        
-                        if desc_changes_count > 0:
-                            st.markdown("#### Description Changes")
-                            desc_changes_df = edited_df[edited_df["Description"] != df_localtags["Description"]][["Name", "Description"]]
-                            desc_changes_df["Original Description"] = df_localtags.loc[desc_changes_df.index, "Description"]
-                            desc_changes_df = desc_changes_df[["Name", "Original Description", "Description"]]
-                            desc_changes_df.columns = ["Tag Name", "Original Description", "New Description"]
-                            st.dataframe(desc_changes_df, use_container_width=True)
-                        
-                        name_mapping = {}
-                        description_mapping = {}
-                        if name_changes_count > 0:
-                            name_changes_subset = edited_df[edited_df["SuggestedName"] != edited_df["Name"]]
-                            name_mapping = dict(zip(name_changes_subset["Name"], name_changes_subset["SuggestedName"]))
-                        
-                        if desc_changes_count > 0:
-                            desc_changes_subset = edited_df[edited_df["Description"] != df_localtags["Description"]]
-                            description_mapping = dict(zip(desc_changes_subset["Name"], desc_changes_subset["Description"]))
-                        
-                        st.session_state.local_name_changes = name_mapping
-                        st.session_state.local_description_changes = description_mapping
-                        st.session_state.edited_local_df = edited_df
-                    else:
-                        st.info("No local tag changes proposed.")
-                        st.session_state.local_name_changes = {}
-                        st.session_state.local_description_changes = {}
+                    if desc_changes_count > 0:
+                        st.markdown("#### Description Changes")
+                        desc_changes_df = edited_df[edited_df["Description"] != df_localtags["Description"]][["Name", "Description"]]
+                        desc_changes_df["Original Description"] = df_localtags.loc[desc_changes_df.index, "Description"]
+                        desc_changes_df = desc_changes_df[["Name", "Original Description", "Description"]]
+                        desc_changes_df.columns = ["Tag Name", "Original Description", "New Description"]
+                        st.dataframe(desc_changes_df, use_container_width=True)
+                    
+                    name_mapping = {}
+                    description_mapping = {}
+                    if name_changes_count > 0:
+                        name_changes_subset = edited_df[edited_df["SuggestedName"] != edited_df["Name"]]
+                        name_mapping = dict(zip(name_changes_subset["Name"], name_changes_subset["SuggestedName"]))
+                    
+                    if desc_changes_count > 0:
+                        desc_changes_subset = edited_df[edited_df["Description"] != df_localtags["Description"]]
+                        description_mapping = dict(zip(desc_changes_subset["Name"], desc_changes_subset["Description"]))
+                    
+                    st.session_state.local_name_changes = name_mapping
+                    st.session_state.local_description_changes = description_mapping
+                    st.session_state.edited_local_df = edited_df
+                else:
+                    st.info("No local tag changes proposed.")
+                    st.session_state.local_name_changes = {}
+                    st.session_state.local_description_changes = {}
 
         with tabs[2]:  # AOI Identity Editor Tab
             if aoi_data:
@@ -1014,8 +1183,7 @@ def main():
             else:
                 st.write("No AOI identity information found.")
 
-        # --- NEW: Rung Comments Editor Tab --------------------------------------------
-        with tabs[3]:
+        with tabs[3]:  # Rung Comments Editor Tab
             rungs_data = extract_rung_comments(main_aoi)
             if rungs_data:
                 df_rungs = pd.DataFrame(rungs_data)
@@ -1023,7 +1191,6 @@ def main():
                 st.markdown("### Rung Comments Check and Editor")
                 st.markdown("**Instructions:** Review and edit **Comment** and **LocalizedComment**. Other columns are read-only for context.")
 
-                # Order and flag columns
                 edit_cols = ["Routine", "RungNumber", "RungType", "RungText", "Comment", "LocalizedComment"]
                 display_df = df_rungs[edit_cols].copy()
 
@@ -1044,7 +1211,6 @@ def main():
                     hide_index=True
                 )
 
-                # Compute changes
                 changed_mask = (edited_df["Comment"] != df_rungs["Comment"]) | \
                             (edited_df["LocalizedComment"] != df_rungs["LocalizedComment"])
                 changes_count = int(changed_mask.sum())
@@ -1059,13 +1225,11 @@ def main():
                     proposed = edited_df.loc[changed_mask, ["Routine", "RungNumber", "Comment", "LocalizedComment"]].copy()
                     proposed["Original Comment"] = df_rungs.loc[changed_mask, "Comment"]
                     proposed["Original Localized"] = df_rungs.loc[changed_mask, "LocalizedComment"]
-                    # Reorder for readability
                     proposed = proposed[["Routine", "RungNumber",
                                         "Original Comment", "Comment",
                                         "Original Localized", "LocalizedComment"]]
                     st.dataframe(proposed, use_container_width=True)
 
-                    # Store changes for Apply step
                     change_rows = []
                     for idx in proposed.index:
                         change_rows.append({
@@ -1084,7 +1248,10 @@ def main():
                 st.info("No RLL routines / rung comments found.")
                 st.session_state.rung_comment_changes = []
 
-        with tabs[4]:  # Download Updated File Tab
+        with tabs[4]:  # Faceplate Validator Tab
+            faceplate_validation_tab(local_tags_data)
+
+        with tabs[5]:  # Download Updated File Tab
             st.markdown("### Download Updated AOI File")
             
             has_param_changes = ('param_name_changes' in st.session_state and st.session_state.param_name_changes) or \
@@ -1092,9 +1259,7 @@ def main():
             has_local_changes = ('local_name_changes' in st.session_state and st.session_state.local_name_changes) or \
                               ('local_description_changes' in st.session_state and st.session_state.local_description_changes)
             has_aoi_changes = 'aoi_changes' in st.session_state and st.session_state.aoi_changes
-            
-            has_rung_changes  = 'rung_comment_changes' in st.session_state and st.session_state.rung_comment_changes  # NEW
-
+            has_rung_changes = 'rung_comment_changes' in st.session_state and st.session_state.rung_comment_changes
             
             if has_param_changes or has_local_changes or has_aoi_changes or has_rung_changes:
                 st.markdown("**Proposed Changes:**")
@@ -1197,7 +1362,7 @@ def main():
                             total_changes_made += changes_made
                             all_change_details.extend(change_details)
                         
-                        
+                        # Apply rung comment changes
                         if has_rung_changes:
                             rung_changes = st.session_state.get('rung_comment_changes', [])
                             updated_xml, changes_made, change_details = update_rung_comments(
@@ -1299,7 +1464,7 @@ def main():
                 else:
                     st.info("Click 'Apply Changes' to process the proposed changes.")
             else:
-                st.info("No changes to apply. Make edits in the Parameters Editor, Local Tags Editor, or AOI Identity Editor tabs first.")
+                st.info("No changes to apply. Make edits in the Parameters Editor, Local Tags Editor, AOI Identity Editor, or Rung Comments Editor tabs first.")
                 
             st.markdown("---")
             st.markdown("**Download Original File:**")
