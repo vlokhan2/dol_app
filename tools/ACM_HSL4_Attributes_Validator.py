@@ -270,7 +270,7 @@ def main():
                         issues = []
                         if attr_data["Status"] != "Published":
                             issues.append("Status should be 'Published'")
-                        print("hsl---", attr["ModifiedBy"])
+                        #print("hsl---", attr["ModifiedBy"])
                         if attr["ModifiedBy"] != "Rockwell Automation":
                             issues.append("ModifiedBy should be 'Rockwell Automation'")
                         if attr["ModifiedDate"] != "":
