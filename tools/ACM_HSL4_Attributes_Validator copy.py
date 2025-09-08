@@ -4,81 +4,6 @@ import lxml.etree as ET
 import pandas as pd
 import zipfile
 import os
-from datetime import datetime
-import re
-
-class InMemoryUpload:
-    """Simple in-memory UploadedFile-like object for zip entries."""
-    def __init__(self, name: str, data: bytes):
-        self.name = name
-        self._data = data
-    def read(self):
-        return self._data
-    def seek(self, *_):
-        pass
-
-def normalize_change_date(value: str) -> str:
-    """
-    Normalize various date/time inputs to ISO 'YYYY-MM-DDTHH:MM:SS'.
-    If blank or format unknown, return the original string (or '').
-    """
-    v = (value or "").strip()
-    if not v:
-        return ""
-    # Already ISO-like?
-    try:
-        # Accept full ISO without timezone
-        dt = datetime.strptime(v, "%Y-%m-%dT%H:%M:%S")
-        return dt.strftime("%Y-%m-%dT%H:%M:%S")
-    except ValueError:
-        pass
-
-    # Try common patterns
-    patterns = [
-        "%Y-%m-%d %H:%M:%S", "%d-%m-%Y %H:%M:%S", "%m/%d/%Y %H:%M:%S",
-        "%Y-%m-%d", "%d-%m-%Y", "%m/%d/%Y"
-    ]
-    for fmt in patterns:
-        try:
-            dt = datetime.strptime(v, fmt)
-            # If no time in the format, set 00:00:00
-            if "H" not in fmt:
-                dt = dt.replace(hour=0, minute=0, second=0)
-            return dt.strftime("%Y-%m-%dT%H:%M:%S")
-        except ValueError:
-            continue
-    # As a fallback, keep whatever user typed
-    return v
-
-def extract_hz1_index(uploaded_hz1_files):
-    """
-    Parse .HZ1 XML files and index them by Attachment @ID.
-    Returns: { id: {"tree": ElementTree, "root": Element, "file_name": str} }
-    """
-    index = {}
-    parser = ET.XMLParser(strip_cdata=False, remove_blank_text=True)
-    for uf in uploaded_hz1_files:
-        try:
-            data = uf.read()
-            # .HZ1 content is a single <Attachment ...> root
-            root = ET.fromstring(data, parser=parser)
-            # Tolerate xmlns or bare tag: check tag suffix
-            if not str(root.tag).endswith("Attachment"):
-                st.warning(f"'{uf.name}' does not look like an Attachment XML; skipped.")
-                continue
-            att_id = root.attrib.get("ID", "").strip()
-            if not att_id:
-                st.warning(f"'{uf.name}' has no Attachment ID; skipped.")
-                continue
-            index[att_id] = {
-                "tree": ET.ElementTree(root),
-                "root": root,
-                "file_name": uf.name
-            }
-        except Exception as e:
-            st.warning(f"Could not parse HZ1 '{uf.name}': {e}")
-    return index
-
 
 # Comparison strings for ExtractionPath validation
 COMPARISON_STRINGS = [
@@ -91,6 +16,21 @@ COMPARISON_STRINGS = [
     '{ProjectName}\\Visualization\\ViewDesigner',
     '{ProjectName}\\Visualization'
 ]
+
+# # Mapping of Description to Extraction_Path
+# DESCRIPTION_TO_EXTRACTION_PATH = {
+#     'Toolbox SE': '{ProjectName}\\Visualization\\FTViewSE\\GlobalObjects', #'(raC-5-SE) Toolbox - IO Device.ggfx'
+#     'Toolbox ME': '{ProjectName}\\Visualization\\FTViewME\\GlobalObjects', #'(raC-5-ME) Toolbox - IO Device.ggfx'
+#     'Graphic Symbols ME': '{ProjectName}\\Visualization\\FTViewME\\GlobalObjects', #'(raC-5-ME) Graphic Symbols - IO Device.ggfx'
+#     'Graphic Symbols SE': '{ProjectName}\\Visualization\\FTViewSE\\GlobalObjects', #'(raC-5-SE) Graphic Symbols - IO Device.ggfx'
+#     'Faceplate ME': '{ProjectName}\\Visualization\\FTViewME\\Displays', #'(raC-4_00-ME) raC_Dvc_PF755-Faceplate.gfx'
+#     'Faceplate SE': '{ProjectName}\\Visualization\\FTViewSE\\Displays', #'(raC-4_00-SE) raC_Dvc_PF755-Faceplate.gfx'
+#     'View Designer': '{ProjectName}\\Visualization\\ViewDesigner', #'raC_Dvc_5034IO_wDesc.vpd'
+#     'Reference Manual': '{ProjectName}\\Documentation', #'DEVICE-RM100F-EN-P.pdf'
+#     'HMI Image Set': '{ProjectName}\\Visualization\\Images', #'HMI-FactoryTalk-View-Images.zip'
+#     'HMI Tag': '{ProjectName}\\Visualization' #'FTViewStudio_IOLibrary_Tags_5_00.CSV'
+# }
+
 
 
 def extract_attributes_from_files(uploaded_files):
@@ -147,6 +87,7 @@ def extract_attachment_attributes(uploaded_files):
     attachment_attributes = {}
     for uploaded_file in uploaded_files:
         try:
+            # Read text file content
             content = uploaded_file.read().decode('utf-8')
             lines = content.splitlines()
             file_name = uploaded_file.name
@@ -157,21 +98,21 @@ def extract_attachment_attributes(uploaded_files):
                 if i == 0 or not line.strip():
                     attachment_attributes[file_name]["line_indices"].append(None)
                     continue
-
+                    
                 attributes = {}
                 for attr in line.strip().split(','):
                     if '=' in attr:
                         key, value = attr.strip().split('=', 1)
                         attributes[key.strip()] = value.strip().strip("'").strip('"')  # Remove quotes
-
-                # Extract required fields (now includes File_ID)
+                
+                # Extract required fields without derivation
                 file_name_attr = attributes.get('File_Name', '')
                 description = attributes.get('Description', '')
                 extraction_path = attributes.get('Extraction_Path', '')
+                # Handle typo in Revision_Description
                 revision_description = attributes.get('Revison_Description', attributes.get('Revision_Description', ''))
                 modified_date = attributes.get('Modified_Date', '')
                 modified_by = attributes.get('Modified_By', '')
-                file_id = attributes.get('File_ID', '')
 
                 attachment_attributes[file_name]["attributes"].append({
                     "File_Name": file_name_attr,
@@ -180,14 +121,13 @@ def extract_attachment_attributes(uploaded_files):
                     "Revision_Description": revision_description,
                     "Modified_Date": modified_date,
                     "Modified_By": modified_by,
-                    "File_ID": file_id,
                     "original_line_index": i
                 })
                 attachment_attributes[file_name]["line_indices"].append(i)
+
         except Exception as e:
             st.error(f"Failed to process attachment {uploaded_file.name}: {e}")
     return attachment_attributes
-
 
 def derive_description_and_path(file_name):
     """Derive Description and Extraction_Path based on File_Name."""
@@ -232,7 +172,7 @@ def main():
     # File uploader for Attachments (text files or ZIP)
     uploaded_attachment_files = st.file_uploader(
         "Select one or more Attachment .txt files or a ZIP file",
-        type=["txt", "hz1", "zip"],
+        type=["txt", "zip"],
         accept_multiple_files=True,
         key="uploader_attachments"
     )
@@ -619,66 +559,46 @@ def main():
     with tab3:
         st.markdown("""
         ### Attachments Validator
-        - Upload a mix of `.txt` and `.HZ1` files (or a ZIP containing them).
-        - Review/edit fields from `.txt`. When you apply, the linked `.HZ1` (matched by `File_ID`) is updated:
-        - `Desc` ← **Description**
-        - `RevDesc` ← **Revision_Description**
-        - `ChangeDate` ← **Modified_Date** (normalized to `YYYY-MM-DDTHH:MM:SS`)
-        - `ChangeUser` ← **Modified_By**
-        - `FileName` + `Ext` ← **File_Name** (if present)
-        - Download a ZIP containing **both** updated `.txt` and `.HZ1`.
+        - Upload one or more `.txt` files from the Attachments folder or a ZIP containing them.
+        - The table shows File_Name, Found Description, New Description, Found Extraction_Path, New Extraction_Path, Revision_Description, Modified_Date, and Modified_By.
+        - Found values are the original values from the file, validated for correctness.
+        - New values are automatically suggested when found values are invalid (based on file name); edit them if needed or leave blank to keep the found value.
+        - Invalid fields are highlighted with ❌ in the Status Check column.
+        - Apply changes to update the files and download as a ZIP archive.
         """)
 
-        # Attachments uploader NOW accepts HZ1 too
-        # uploaded_attachment_files = st.file_uploader(
-        #     "Select .txt/.HZ1 or a ZIP containing them",
-        #     type=["txt", "hz1", "zip"],
-        #     accept_multiple_files=True,
-        #     key="uploader_attachments"
-        # )
-
-        # Separate file lists from uploads (+ zip expansion)
-        attachment_txt_files, hz1_files = [], []
-
+        # Process uploaded attachment files
+        attachment_files = []
         if uploaded_attachment_files:
             for uploaded_file in uploaded_attachment_files:
-                name_lower = uploaded_file.name.lower()
-
-                if name_lower.endswith('.zip'):
+                if uploaded_file.name.endswith('.zip'):
                     try:
                         with zipfile.ZipFile(uploaded_file, 'r') as zip_file:
-                            for member in zip_file.namelist():
-                                ml = member.lower()
-                                if ml.endswith('.txt') or ml.endswith('.hz1'):
-                                    data = zip_file.read(member)
-                                    if ml.endswith('.txt'):
-                                        attachment_txt_files.append(InMemoryUpload(member, data))
-                                    else:
-                                        hz1_files.append(InMemoryUpload(member, data))
+                            for file_name in zip_file.namelist():
+                                if file_name.endswith('.txt'):
+                                    with zip_file.open(file_name) as txt_file:
+                                        attachment_files.append(
+                                            type('UploadedFile', (), {
+                                                'name': file_name,
+                                                'read': lambda: txt_file.read(),
+                                                'seek': lambda x: None
+                                            })()
+                                        )
                     except zipfile.BadZipFile:
                         st.error(f"File '{uploaded_file.name}' is not a valid ZIP file.")
-                elif name_lower.endswith('.txt'):
-                    attachment_txt_files.append(uploaded_file)
-                elif name_lower.endswith('.hz1'):
-                    hz1_files.append(uploaded_file)
+                elif uploaded_file.name.endswith('.txt'):
+                    attachment_files.append(uploaded_file)
 
-        if attachment_txt_files:
-            attachment_attributes = extract_attachment_attributes(attachment_txt_files)
+        if attachment_files:
+            attachment_attributes = extract_attachment_attributes(attachment_files)
             if not attachment_attributes:
                 st.warning("No valid .txt files were uploaded or parsed successfully.")
             else:
-                # Parse HZ1 index for cross-updates
-                hz1_index = extract_hz1_index(hz1_files)
-                # Keep index in state for later apply
-                st.session_state["hz1_index"] = hz1_index
-
                 # Initialize session state for attachments
                 if "pending_attachment_changes" not in st.session_state:
                     st.session_state.pending_attachment_changes = []
                 if "attachment_updates" not in st.session_state:
                     st.session_state.attachment_updates = {}
-                if "hz1_updates" not in st.session_state:
-                    st.session_state.hz1_updates = {}
                 if "attachment_updates_applied" not in st.session_state:
                     st.session_state.attachment_updates_applied = False
 
@@ -686,10 +606,11 @@ def main():
                 for file_name, attr_data in attachment_attributes.items():
                     for i, attr in enumerate(attr_data["attributes"]):
                         issues = []
-
+                        # Store original (found) values for validation
                         found_description = attr["Description"]
                         found_extraction_path = attr["Extraction_Path"]
 
+                        # Validate Description
                         valid_descriptions = [
                             'Toolbox SE', 'Toolbox ME', 'Graphic Symbols SE', 'Graphic Symbols ME',
                             'Faceplate SE', 'Faceplate ME', 'View Designer', 'Reference Manual',
@@ -698,6 +619,7 @@ def main():
                         if not found_description or found_description not in valid_descriptions:
                             issues.append(f"Invalid Description: {found_description if found_description else 'blank'}")
 
+                        # Validate Extraction_Path
                         if not found_extraction_path or found_extraction_path not in COMPARISON_STRINGS:
                             issues.append(f"Invalid Extraction_Path: {found_extraction_path if found_extraction_path else 'blank'}")
 
@@ -709,14 +631,9 @@ def main():
                         status_check = "❌" if issues else "✅"
                         issue_details = "; ".join(issues) if issues else "All okay"
 
-                        file_id = attr.get("File_ID", "")
-                        hz1_match = "✅" if file_id and file_id in hz1_index else "❌"
-
                         attachment_data.append({
                             "File Name": file_name,
                             "Index": f"Entry {i+1}",
-                            "File_ID": file_id,
-                            "HZ1 Match": hz1_match,
                             "File_Name": attr["File_Name"],
                             "Found Description": found_description,
                             "New Description": new_description,
@@ -742,8 +659,6 @@ def main():
                         column_config={
                             "File Name": st.column_config.TextColumn("File Name", disabled=True),
                             "Index": st.column_config.TextColumn("Index", disabled=True),
-                            "File_ID": st.column_config.TextColumn("File_ID", disabled=True),
-                            "HZ1 Match": st.column_config.TextColumn("HZ1 Match", disabled=True),
                             "File_Name": st.column_config.TextColumn("File_Name", disabled=True),
                             "Found Description": st.column_config.TextColumn("Found Description", disabled=True),
                             "New Description": st.column_config.TextColumn("New Description", default='', required=False),
@@ -768,11 +683,10 @@ def main():
                         file_name = row["_file_name"]
                         entry_index = row["_entry_index"]
                         attr_data = attachment_attributes[file_name]["attributes"][entry_index]
-
                         changes = []
+
                         found_description = row["Found Description"]
                         found_extraction_path = row["Found Extraction_Path"]
-
                         new_description = row["New Description"] if row["New Description"] else found_description
                         new_extraction_path = row["New Extraction_Path"] if row["New Extraction_Path"] else found_extraction_path
 
@@ -829,6 +743,7 @@ def main():
                                     "Old Value": c["Old Value"],
                                     "New Value": c["New Value"]
                                 })
+
                         attachment_change_df = pd.DataFrame(attachment_change_data)
                         st.dataframe(
                             attachment_change_df,
@@ -842,114 +757,66 @@ def main():
                             hide_index=True
                         )
 
-                    if st.button("Apply Attachment Changes", key="apply_changes_attachments"):
-                        attachment_updates = {}
-                        hz1_updates = st.session_state.get("hz1_updates", {})
-                        hz1_index = st.session_state.get("hz1_index", {})
+                        if st.button("Apply Attachment Changes", key="apply_changes_attachments"):
+                            attachment_updates = {}
+                            for change in st.session_state.pending_attachment_changes:
+                                file_name = change["_file_name"]
+                                entry_index = change["_entry_index"]
+                                attr_data = attachment_attributes[file_name]
+                                original_lines = attr_data["original_content"]
+                                updated_lines = original_lines.copy()
 
-                        # First: apply edits to in-memory .txt attributes
-                        for change in st.session_state.pending_attachment_changes:
-                            file_name = change["_file_name"]
-                            entry_index = change["_entry_index"]
-                            attr_file = attachment_attributes[file_name]
-                            original_lines = attr_file["original_content"]
+                                for c in change["Changes"]:
+                                    field = c["Field"]
+                                    new_value = c["New Value"]
+                                    if field == "Description":
+                                        attr_data["attributes"][entry_index]["Description"] = new_value
+                                    elif field == "Extraction_Path":
+                                        attr_data["attributes"][entry_index]["Extraction_Path"] = new_value
+                                    else:
+                                        attr_data["attributes"][entry_index][field] = new_value
 
-                            # Apply changes to structured dict
-                            for c in change["Changes"]:
-                                field = c["Field"]
-                                new_value = c["New Value"]
-                                if field == "Description":
-                                    attr_file["attributes"][entry_index]["Description"] = new_value
-                                elif field == "Extraction_Path":
-                                    attr_file["attributes"][entry_index]["Extraction_Path"] = new_value
-                                else:
-                                    attr_file["attributes"][entry_index][field] = new_value
+                                # Reconstruct the text file content
+                                updated_content = []
+                                attr_index_map = {attr["original_line_index"]: i for i, attr in enumerate(attr_data["attributes"])}
+                                for i, line in enumerate(original_lines):
+                                    if i in attr_index_map:
+                                        attr = attr_data["attributes"][attr_index_map[i]]
+                                        updated_attrs = []
+                                        for attr_pair in line.split(','):
+                                            attr_name = attr_pair.split('=')[0].strip()
+                                            # Map Revison_Description to Revision_Description in output
+                                            if attr_name == 'Revison_Description':
+                                                attr_name = 'Revision_Description'
+                                            if attr_name in attr:
+                                                updated_attrs.append(f"{attr_name}='{attr[attr_name]}'")
+                                            else:
+                                                updated_attrs.append(attr_pair.strip())
+                                        updated_content.append(", ".join(updated_attrs))
+                                    else:
+                                        updated_content.append(line)
 
-                            # Reconstruct the text only once per file (after all its entries are updated)
-                            # We'll rebuild after the loop over all changes for this file
-                        # Rebuild ALL .txt contents (reflecting the latest in-memory attributes)
-                        for file_name, attr_file in attachment_attributes.items():
-                            original_lines = attr_file["original_content"]
-                            updated_content = []
-                            attr_index_map = {attr["original_line_index"]: i for i, attr in enumerate(attr_file["attributes"])}
-                            for i, line in enumerate(original_lines):
-                                if i in attr_index_map:
-                                    a = attr_file["attributes"][attr_index_map[i]]
-                                    # Rebuild this CSV-like line preserving order where possible
-                                    updated_attrs = []
-                                    for attr_pair in line.split(','):
-                                        key = attr_pair.split('=')[0].strip()
-                                        # Map Revison_Description -> Revision_Description on output
-                                        out_key = 'Revision_Description' if key == 'Revison_Description' else key
-                                        if out_key in a:
-                                            updated_attrs.append(f"{out_key}='{a[out_key]}'")
-                                        else:
-                                            updated_attrs.append(attr_pair.strip())
-                                    updated_content.append(", ".join(updated_attrs))
-                                else:
-                                    updated_content.append(line)
-                            attachment_updates[file_name] = "\n".join(updated_content)
+                                attachment_updates[file_name] = "\n".join(updated_content)
 
-                        # Now: propagate to HZ1 per entry using the final values currently in attr_file["attributes"]
-                        missing_hz1 = []
-                        for file_name, attr_file in attachment_attributes.items():
-                            for a in attr_file["attributes"]:
-                                file_id = (a.get("File_ID") or "").strip()
-                                if not file_id:
-                                    continue
-                                hz1 = hz1_index.get(file_id)
-                                if not hz1:
-                                    missing_hz1.append(file_id)
-                                    continue
+                            st.session_state.attachment_updates = attachment_updates
+                            st.session_state.attachment_updates_applied = True
+                            st.success("Attachment changes applied successfully!")
 
-                                root = hz1["root"]
-                                # Apply mapping (blank values do not overwrite)
-                                if a.get("Description"):
-                                    root.attrib["Desc"] = a["Description"]
-                                if a.get("Revision_Description"):
-                                    root.attrib["RevDesc"] = a["Revision_Description"]
-                                if a.get("Modified_By"):
-                                    root.attrib["ChangeUser"] = a["Modified_By"]
-                                if a.get("Modified_Date"):
-                                    root.attrib["ChangeDate"] = normalize_change_date(a["Modified_Date"])
-                                if a.get("File_Name"):
-                                    root.attrib["FileName"] = a["File_Name"]
-                                    # Derive Ext from File_Name extension
-                                    m = re.search(r"\.([A-Za-z0-9]+)$", a["File_Name"])
-                                    if m:
-                                        root.attrib["Ext"] = m.group(1)
-
-                                # Keep the tree ready for zip
-                                hz1_updates[hz1["file_name"]] = hz1["tree"]
-
-                        if missing_hz1:
-                            st.warning(f"No matching .HZ1 found for File_ID(s): {', '.join(sorted(set(missing_hz1)))}")
-
-                        st.session_state.attachment_updates = attachment_updates
-                        st.session_state.hz1_updates = hz1_updates
-                        st.session_state.attachment_updates_applied = True
-                        st.success("Attachment and HZ1 changes applied successfully!")
-
-                    # Show download button for attachment + HZ1 updates
-                    if st.session_state.attachment_updates_applied and (st.session_state.attachment_updates or st.session_state.hz1_updates):
-                        st.markdown("### Download Updated Attachment + HZ1 Files")
+                    # Show download button for attachment updates
+                    if st.session_state.attachment_updates_applied and st.session_state.attachment_updates:
+                        st.markdown("### Download Updated Attachment Files")
                         out_io = io.BytesIO()
                         with zipfile.ZipFile(out_io, mode="w", compression=zipfile.ZIP_DEFLATED) as zout:
-                            # .txt files
                             for file_name, content in st.session_state.attachment_updates.items():
                                 zout.writestr(file_name, content.encode('utf-8'))
-                            # .HZ1 files
-                            for file_name, tree in st.session_state.hz1_updates.items():
-                                xml_bytes = io.BytesIO()
-                                tree.write(xml_bytes, encoding='utf-8', xml_declaration=True, pretty_print=True)
-                                zout.writestr(file_name, xml_bytes.getvalue())
                         out_io.seek(0)
+
                         st.download_button(
-                            label="Download Updated ZIP (.txt + .HZ1)",
+                            label="Download Updated Attachment ZIP",
                             data=out_io,
-                            file_name="updated_attachment_and_hz1_files.zip",
+                            file_name="updated_attachment_files.zip",
                             mime="application/zip",
-                            key="download_zip_attachments_hz1"
+                            key="download_zip_attachments"
                         )
                     elif not st.session_state.pending_attachment_changes:
                         st.info("No attachment changes detected to apply or download.")
@@ -958,8 +825,7 @@ def main():
                     if st.session_state.attachment_table.get("edited_rows"):
                         st.session_state.attachment_updates_applied = False
         else:
-            st.info("Please upload .txt/.HZ1 files or a ZIP containing them to validate attachments.")
-
+            st.info("Please upload .txt files or a ZIP containing .txt files to validate attachments.")
 
 if __name__ == "__main__":
     main()
