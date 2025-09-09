@@ -545,14 +545,22 @@ def main():
         "Inf_Lookup"
     }
 
+    
     def clean_ref_prefix(name):
         if name in exceptions_ref_names:
             return name
+
         name_no_underscore = name.replace("_", "")
+
         if name_no_underscore.startswith("Ref"):
             return "Ref_" + name_no_underscore[3:]
+        elif name_no_underscore.startswith("Inp"):
+            return "Inp_" + name_no_underscore[3:]
+        elif name_no_underscore.startswith("Out"):
+            return "Out_" + name_no_underscore[3:]
         else:
             return "Ref_" + name_no_underscore
+
 
     def suggest_parameter_name(row):
         reasons = []
@@ -594,9 +602,10 @@ def main():
 
         if usage == "InOut":
             expected_name = clean_ref_prefix(original_name)
+
             if original_name not in exceptions_ref_names:
-                if not original_name.startswith("Ref_"):
-                    reasons.append("Name prefix missing 'Ref_'")
+                if not (original_name.startswith("Ref_") or original_name.startswith("Inp_") or original_name.startswith("Out_")):
+                    reasons.append("Name prefix missing: should start with 'Ref_', 'Inp_' or 'Out_'")
                     suggestion = expected_name
                     wrong = True
                 elif original_name != expected_name:
@@ -610,6 +619,7 @@ def main():
                     suggestion = expected_name
                     wrong = True
 
+
             if not required:
                 reasons.append("Required is not true")
                 wrong = True
@@ -620,15 +630,21 @@ def main():
                 reasons.append("ExternalAccess not None")
                 wrong = True
 
-        elif usage == "Input":
+        elif usage == "Input":            
             if effective_dtype == "BOOL":
-                if not original_name.startswith("Cmd_"):
-                    reasons.append("Input BOOL name missing 'Cmd_' prefix")
-                    suggestion = clean_prefix("Cmd_", original_name)
-                    wrong = True
+                    if visible and required:
+                        if not original_name.startswith("Inp_"):
+                            reasons.append("Input BOOL name with visible=True and required=True should start with 'Inp_'")
+                            suggestion = clean_prefix("Inp_", original_name)
+                            wrong = True
+                    elif not visible and not required:
+                        if not original_name.startswith("Cmd_"):
+                            reasons.append("Input BOOL name with visible=False and required=False should start with 'Cmd_'")
+                            suggestion = clean_prefix("Cmd_", original_name)
+                            wrong = True
             else:
-                if not (original_name.startswith("Cfg_") or original_name.startswith("Set_")):
-                    reasons.append("Input non-BOOL name missing 'Cfg_' or 'Set_' prefix")
+                if not (original_name.startswith("Cfg_") or original_name.startswith("Set_") or original_name.startswith("Cmd_b")):
+                    reasons.append("Input non-BOOL name missing 'Cfg_' or 'Set_' prefix" or 'Cmd_b')
                     suggestion = clean_prefix("Cfg_", original_name)
                     wrong = True
 
