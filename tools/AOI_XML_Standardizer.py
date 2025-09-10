@@ -643,10 +643,16 @@ def main():
                             suggestion = clean_prefix("Cmd_", original_name)
                             wrong = True
             else:
-                if not (original_name.startswith("Cfg_") or original_name.startswith("Set_") or original_name.startswith("Cmd_b")):
-                    reasons.append("Input non-BOOL name missing 'Cfg_' or 'Set_' prefix" or 'Cmd_b')
-                    suggestion = clean_prefix("Cfg_", original_name)
-                    wrong = True
+                if visible and required:
+                    if not original_name.startswith("Inp_"):
+                            reasons.append("Input tags with visible=True and required=True should start with 'Inp_'")
+                            suggestion = clean_prefix("Inp_", original_name)
+                            wrong = True
+                elif not visible and not required:
+                    if not (original_name.startswith("Cfg_") or original_name.startswith("Set_") or original_name.startswith("Cmd_b")):
+                        reasons.append("Input non-BOOL name missing 'Cfg_' or 'Set_' prefix" or 'Cmd_b')
+                        suggestion = clean_prefix("Cfg_", original_name)
+                        wrong = True
 
         elif usage == "Output":
             if effective_dtype == "BOOL":
