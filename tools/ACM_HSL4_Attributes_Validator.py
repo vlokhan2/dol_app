@@ -36,7 +36,8 @@ def normalize_change_date(value: str) -> str:
     # Try common patterns
     patterns = [
         "%Y-%m-%d %H:%M:%S", "%d-%m-%Y %H:%M:%S", "%m/%d/%Y %H:%M:%S",
-        "%Y-%m-%d", "%d-%m-%Y", "%m/%d/%Y"
+        "%Y-%m-%d", "%d-%m-%Y", "%m/%d/%Y",
+        "%m/%d/%Y %I:%M:%S %p", "%d-%m-%Y %I:%M:%S %p"  
     ]
     for fmt in patterns:
         try:
@@ -911,7 +912,8 @@ def main():
                                 if a.get("Modified_By"):
                                     root.attrib["ChangeUser"] = a["Modified_By"]
                                 if a.get("Modified_Date"):
-                                    root.attrib["ChangeDate"] = normalize_change_date(a["Modified_Date"])
+                                    root.attrib["ChangeDate"] = normalize_change_date((a["Modified_Date"]))
+                                    print(root.attrib["ChangeDate"])
                                 if a.get("File_Name"):
                                     root.attrib["FileName"] = a["File_Name"]
                                     # Derive Ext from File_Name extension

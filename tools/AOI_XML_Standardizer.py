@@ -604,8 +604,8 @@ def main():
             expected_name = clean_ref_prefix(original_name)
 
             if original_name not in exceptions_ref_names:
-                if not (original_name.startswith("Ref_") or original_name.startswith("Inp_") or original_name.startswith("Out_")):
-                    reasons.append("Name prefix missing: should start with 'Ref_', 'Inp_' or 'Out_'")
+                if not (original_name.startswith("Ref_") or original_name.startswith("Inp_") or original_name.startswith("Out_") or original_name.startswith("Cfg_")):
+                    reasons.append("Name prefix missing: should start with 'Ref_', 'Inp_' or 'Out_' or 'Cfg_")
                     suggestion = expected_name
                     wrong = True
                 elif original_name != expected_name:
