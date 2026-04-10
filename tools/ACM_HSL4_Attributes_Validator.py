@@ -190,6 +190,81 @@ def extract_attachment_attributes(uploaded_files):
     return attachment_attributes
 
 
+def extract_inf_lib_type_from_files(uploaded_files):
+    """
+    Extract Inf_Lib and Inf_Type values from Tags in HSL4 files.
+    Only processes raC_LD files (Library Device files), skips Asset-Control definition files.
+    Returns: { file_name: { "tags": [...], "tree": ElementTree, "catalog_number": str, "is_ld_file": bool } }
+    """
+    file_inf_data = {}
+    for uploaded_file in uploaded_files:
+        try:
+            uploaded_file.seek(0)
+            parser = ET.XMLParser(strip_cdata=False, remove_blank_text=True)
+            tree = ET.parse(uploaded_file, parser=parser)
+            root = tree.getroot()
+            
+            # Get CatalogNumber to determine if this is a raC_LD file
+            catalog_number = root.attrib.get("CatalogNumber", "")
+            is_ld_file = "raC_LD" in catalog_number or "raC_LD" in uploaded_file.name
+            
+            file_inf_data[uploaded_file.name] = {
+                "tags": [],
+                "tree": tree,
+                "catalog_number": catalog_number,
+                "is_ld_file": is_ld_file
+            }
+            
+            # Only extract Inf_Lib/Inf_Type for raC_LD files
+            if not is_ld_file:
+                continue
+            
+            # Find all Tag elements
+            tags = root.findall(".//Tag")
+            for tag in tags:
+                tag_name = tag.attrib.get("Name", "")
+                scope = tag.attrib.get("Scope", "Unknown")
+                
+                # Determine human-readable scope
+                if scope == "ControllerScope":
+                    scope_display = "Controller"
+                elif "Program" in scope:
+                    scope_display = "Program"
+                else:
+                    scope_display = scope
+                
+                # Extract Inf_Lib value
+                inf_lib = ""
+                inf_lib_elem = tag.find(".//StructureMember[@Name='Inf_Lib']/DataValueMember[@Name='DATA']")
+                if inf_lib_elem is not None and inf_lib_elem.text:
+                    # Remove CDATA wrapper and quotes: <![CDATA['raC-4_02']]> -> raC-4_02
+                    inf_lib = inf_lib_elem.text.strip().strip("'")
+                
+                # Extract Inf_Type value
+                inf_type = ""
+                inf_type_elem = tag.find(".//StructureMember[@Name='Inf_Type']/DataValueMember[@Name='DATA']")
+                if inf_type_elem is not None and inf_type_elem.text:
+                    inf_type = inf_type_elem.text.strip().strip("'")
+                
+                # Only include tags that have Inf_Lib or Inf_Type (these are the relevant AOI tags)
+                if inf_lib or inf_type:
+                    file_inf_data[uploaded_file.name]["tags"].append({
+                        "TagName": tag_name,
+                        "Scope": scope_display,
+                        "Inf_Lib": inf_lib,
+                        "Inf_Type": inf_type,
+                        "_tag_element": tag,
+                        "_inf_lib_elem": inf_lib_elem,
+                        "_inf_type_elem": inf_type_elem
+                    })
+                    
+        except ET.XMLSyntaxError:
+            st.warning(f"File '{uploaded_file.name}' is not valid XML and was skipped.")
+        except Exception as e:
+            st.error(f"Failed to process {uploaded_file.name} for Inf_Lib/Inf_Type: {e}")
+    return file_inf_data
+
+
 def derive_description_and_path(file_name):
     """Derive Description and Extraction_Path based on File_Name."""
     file_name = file_name.lower()  # Case-insensitive matching
@@ -222,26 +297,18 @@ def main():
     st.title("ACM HSL4 Attribute Validator and Editor")
     st.set_page_config(layout="wide")
 
-    # File uploader shared across Attribute Editor and Extraction Path Validator
-    uploaded_hsl_files = st.file_uploader(
-        "Select one or more .HSL4 XML files",
-        type=["HSL4", "xml"],
-        accept_multiple_files=True,
-        key="uploader_shared"
-    )
-
-    # File uploader for Attachments (text files or ZIP)
-    uploaded_attachment_files = st.file_uploader(
-        "Select one or more Attachment .txt files or a ZIP file",
-        type=["txt", "hz1", "zip"],
-        accept_multiple_files=True,
-        key="uploader_attachments"
-    )
-
     # Create tabs
-    tab1, tab2, tab3 = st.tabs(["Attribute Editor", "Extraction Path Validator", "Attachments Validator"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Attribute Editor", "Extraction Path Validator", "Attachments Validator", "Inf_Lib / Inf_Type Validator", "DataExchangeId Remover", "ParentModPortId Updater"])
 
     with tab1:
+        # File uploader shared across Attribute Editor, Extraction Path Validator, and Inf_Lib/Inf_Type Validator
+        uploaded_hsl_files = st.file_uploader(
+            "Select one or more .HSL4 XML files",
+            type=["HSL4", "xml"],
+            accept_multiple_files=True,
+            key="uploader_shared"
+        )
+
         st.markdown("""
         ### Instructions
         - Upload one or more `.HSL4` XML files (usually from `ApplicationCodeManagerLibraries`).
@@ -470,6 +537,7 @@ def main():
         - Apply changes and download the updated files as a ZIP archive.
         """)
 
+        uploaded_hsl_files = st.session_state.get("uploader_shared", [])
         if uploaded_hsl_files:
             file_attributes = extract_attributes_from_files(uploaded_hsl_files)
             if not file_attributes:
@@ -615,7 +683,7 @@ def main():
                 if st.session_state.extraction_path_table.get("edited_rows"):
                     st.session_state.path_updates_applied = False
         else:
-            st.info("Please upload .HSL4 files above to validate Extraction Paths.")
+            st.info("Please upload .HSL4 files in the **Attribute Editor** tab to validate Extraction Paths.")
 
     with tab3:
         st.markdown("""
@@ -630,13 +698,13 @@ def main():
         - Download a ZIP containing **both** updated `.txt` and `.HZ1`.
         """)
 
-        # Attachments uploader NOW accepts HZ1 too
-        # uploaded_attachment_files = st.file_uploader(
-        #     "Select .txt/.HZ1 or a ZIP containing them",
-        #     type=["txt", "hz1", "zip"],
-        #     accept_multiple_files=True,
-        #     key="uploader_attachments"
-        # )
+        # File uploader for Attachments (text files or ZIP)
+        uploaded_attachment_files = st.file_uploader(
+            "Select one or more Attachment .txt files or a ZIP file",
+            type=["txt", "hz1", "zip"],
+            accept_multiple_files=True,
+            key="uploader_attachments"
+        )
 
         # Separate file lists from uploads (+ zip expansion)
         attachment_txt_files, hz1_files = [], []
@@ -961,6 +1029,274 @@ def main():
                         st.session_state.attachment_updates_applied = False
         else:
             st.info("Please upload .txt/.HZ1 files or a ZIP containing them to validate attachments.")
+
+    with tab4:
+        st.markdown("""
+        ### Inf_Lib / Inf_Type Validator
+        - Validates `Inf_Lib` and `Inf_Type` tag attributes from **raC_LD** (Library Device) files only.
+        - Asset-Control definition files are skipped (they don't contain these values).
+        - When both Controller and Program scope tags exist, their `Inf_Lib` and `Inf_Type` values must match.
+        - The 'Status Check' column shows ❌ for mismatches and ✅ when values match.
+        """)
+
+        uploaded_hsl_files = st.session_state.get("uploader_shared", [])
+        if uploaded_hsl_files:
+            inf_file_data = extract_inf_lib_type_from_files(uploaded_hsl_files)
+            if not inf_file_data:
+                st.warning("No valid .HSL4 XML files were uploaded or parsed.")
+            else:
+                inf_data = []
+                skipped_files = []
+                
+                for file_name, data in inf_file_data.items():
+                    # Skip non-raC_LD files
+                    if not data["is_ld_file"]:
+                        skipped_files.append(file_name)
+                        continue
+                    
+                    if not data["tags"]:
+                        inf_data.append({
+                            "File Name": file_name,
+                            "Controller Inf_Lib": "",
+                            "Controller Inf_Type": "",
+                            "Program Inf_Lib": "",
+                            "Program Inf_Type": "",
+                            "Status Check": "⚠️",
+                            "Issue Details": "No AOI tags with Inf_Lib/Inf_Type found"
+                        })
+                    else:
+                        # Group tags by scope
+                        controller_tags = [t for t in data["tags"] if t["Scope"] == "Controller"]
+                        program_tags = [t for t in data["tags"] if t["Scope"] == "Program"]
+                        
+                        # Get values (use first tag of each scope if multiple exist)
+                        ctrl_inf_lib = controller_tags[0]["Inf_Lib"] if controller_tags else ""
+                        ctrl_inf_type = controller_tags[0]["Inf_Type"] if controller_tags else ""
+                        prog_inf_lib = program_tags[0]["Inf_Lib"] if program_tags else ""
+                        prog_inf_type = program_tags[0]["Inf_Type"] if program_tags else ""
+                        
+                        issues = []
+                        
+                        # Check if both scopes exist
+                        if controller_tags and program_tags:
+                            # Compare Inf_Lib values
+                            if ctrl_inf_lib != prog_inf_lib:
+                                issues.append(f"Inf_Lib mismatch: Controller='{ctrl_inf_lib}' vs Program='{prog_inf_lib}'")
+                            # Compare Inf_Type values
+                            if ctrl_inf_type != prog_inf_type:
+                                issues.append(f"Inf_Type mismatch: Controller='{ctrl_inf_type}' vs Program='{prog_inf_type}'")
+                        elif not controller_tags and not program_tags:
+                            issues.append("No Controller or Program scope tags found")
+                        
+                        # Check for empty values
+                        if controller_tags:
+                            if not ctrl_inf_lib:
+                                issues.append("Controller Inf_Lib is empty")
+                            if not ctrl_inf_type:
+                                issues.append("Controller Inf_Type is empty")
+                        if program_tags:
+                            if not prog_inf_lib:
+                                issues.append("Program Inf_Lib is empty")
+                            if not prog_inf_type:
+                                issues.append("Program Inf_Type is empty")
+                        
+                        status_check = "❌" if issues else "✅"
+                        issue_details = "; ".join(issues) if issues else "All okay - values match"
+                        
+                        inf_data.append({
+                            "File Name": file_name,
+                            "Controller Inf_Lib": ctrl_inf_lib,
+                            "Controller Inf_Type": ctrl_inf_type,
+                            "Program Inf_Lib": prog_inf_lib,
+                            "Program Inf_Type": prog_inf_type,
+                            "Status Check": status_check,
+                            "Issue Details": issue_details
+                        })
+                
+                # Show skipped files info
+                if skipped_files:
+                    st.info(f"**Skipped {len(skipped_files)} Asset-Control/Definition file(s):** {', '.join(skipped_files)}")
+                
+                if inf_data:
+                    inf_df = pd.DataFrame(inf_data)
+                    
+                    st.markdown("### Inf_Lib / Inf_Type Comparison (Controller vs Program)")
+                    st.dataframe(
+                        inf_df,
+                        column_config={
+                            "File Name": st.column_config.TextColumn("File Name"),
+                            "Controller Inf_Lib": st.column_config.TextColumn("Controller Inf_Lib"),
+                            "Controller Inf_Type": st.column_config.TextColumn("Controller Inf_Type"),
+                            "Program Inf_Lib": st.column_config.TextColumn("Program Inf_Lib"),
+                            "Program Inf_Type": st.column_config.TextColumn("Program Inf_Type"),
+                            "Status Check": st.column_config.TextColumn("Status Check"),
+                            "Issue Details": st.column_config.TextColumn("Issue Details")
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
+                    
+                    # Summary statistics
+                    total_files = len(inf_data)
+                    valid_files = len([d for d in inf_data if d["Status Check"] == "✅"])
+                    invalid_files = len([d for d in inf_data if d["Status Check"] == "❌"])
+                    
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total raC_LD Files", total_files)
+                    with col2:
+                        st.metric("Valid (Match)", valid_files)
+                    with col3:
+                        st.metric("Issues (Mismatch)", invalid_files)
+                else:
+                    st.info("No raC_LD files found. Only raC_LD (Library Device) files contain Inf_Lib/Inf_Type values.")
+        else:
+            st.info("Please upload .HSL4 files in the **Attribute Editor** tab to validate Inf_Lib and Inf_Type values.")
+
+    with tab5:
+        st.markdown("""
+        ### DataExchangeId Remover
+        - Upload one or more **Module-type** `.HSL4` / `.HSL` files.
+        - The tool scans every file for `DataExchangeId="..."` attributes (added during export).
+        - Review the occurrences found, then click **Remove & Download** to get cleaned files.
+        - **No other content in the files is modified.**
+        """)
+
+        uploaded_dxid_files = st.file_uploader(
+            "Select one or more Module-type HSL files",
+            type=["HSL4", "HSL", "xml"],
+            accept_multiple_files=True,
+            key="uploader_dxid"
+        )
+
+        if uploaded_dxid_files:
+            # Read raw content and find DataExchangeId occurrences
+            dxid_pattern = re.compile(r'\s+DataExchangeId="[^"]*"')
+            dxid_summary = []
+            dxid_file_contents = {}
+
+            for uf in uploaded_dxid_files:
+                raw = uf.read().decode("utf-8")
+                matches = dxid_pattern.findall(raw)
+                dxid_file_contents[uf.name] = raw
+                for m in matches:
+                    # Extract just the GUID value for display
+                    val_match = re.search(r'DataExchangeId="([^"]*)"', m)
+                    dxid_summary.append({
+                        "File Name": uf.name,
+                        "DataExchangeId": val_match.group(1) if val_match else m.strip(),
+                    })
+
+            if dxid_summary:
+                st.markdown(f"**Found {len(dxid_summary)} DataExchangeId attribute(s) across {len(dxid_file_contents)} file(s).**")
+
+                dxid_df = pd.DataFrame(dxid_summary)
+                st.dataframe(
+                    dxid_df,
+                    column_config={
+                        "File Name": st.column_config.TextColumn("File Name"),
+                        "DataExchangeId": st.column_config.TextColumn("DataExchangeId Value"),
+                    },
+                    hide_index=True,
+                    use_container_width=True,
+                )
+
+                if st.button("Remove All DataExchangeId & Download", key="btn_remove_dxid"):
+                    out_io = io.BytesIO()
+                    with zipfile.ZipFile(out_io, mode="w", compression=zipfile.ZIP_DEFLATED) as zout:
+                        for fname, content in dxid_file_contents.items():
+                            cleaned = dxid_pattern.sub("", content)
+                            zout.writestr(fname, cleaned.encode("utf-8"))
+                    out_io.seek(0)
+
+                    st.success(f"Removed {len(dxid_summary)} DataExchangeId attribute(s). Download below.")
+                    st.download_button(
+                        label="Download Cleaned HSL Files (ZIP)",
+                        data=out_io,
+                        file_name="cleaned_HSL_files.zip",
+                        mime="application/zip",
+                        key="download_zip_dxid",
+                    )
+            else:
+                st.success("No DataExchangeId attributes found in the uploaded files. Files are already clean.")
+        else:
+            st.info("Upload Module-type HSL files to scan and remove DataExchangeId attributes.")
+
+    with tab6:
+        st.markdown("""
+        ### ParentModPortId Updater
+        - Upload one or more **Module-type** `.HSL4` / `.HSL` files.
+        - The tool finds all `ParentModPortId="..."` attributes and replaces the value with `{ParentModulePort}`.
+        - Review the occurrences found, then click **Update & Download** to get the modified files.
+        - **No other content in the files is modified.**
+        """)
+
+        uploaded_pmpid_files = st.file_uploader(
+            "Select one or more Module-type HSL files",
+            type=["HSL4", "HSL", "xml"],
+            accept_multiple_files=True,
+            key="uploader_pmpid"
+        )
+
+        if uploaded_pmpid_files:
+            pmpid_pattern = re.compile(r'ParentModPortId="[^"]*"')
+            pmpid_summary = []
+            pmpid_file_contents = {}
+
+            for uf in uploaded_pmpid_files:
+                raw = uf.read().decode("utf-8")
+                matches = pmpid_pattern.findall(raw)
+                pmpid_file_contents[uf.name] = raw
+                for m in matches:
+                    val_match = re.search(r'ParentModPortId="([^"]*)"', m)
+                    current_val = val_match.group(1) if val_match else m
+                    already_set = current_val == "{ParentModulePort}"
+                    pmpid_summary.append({
+                        "File Name": uf.name,
+                        "Current Value": current_val,
+                        "Status": "\u2705 Already correct" if already_set else "\u274c Needs update",
+                    })
+
+            if pmpid_summary:
+                needs_update = [s for s in pmpid_summary if "Needs update" in s["Status"]]
+                st.markdown(f"**Found {len(pmpid_summary)} ParentModPortId attribute(s) across {len(pmpid_file_contents)} file(s). {len(needs_update)} need updating.**")
+
+                pmpid_df = pd.DataFrame(pmpid_summary)
+                st.dataframe(
+                    pmpid_df,
+                    column_config={
+                        "File Name": st.column_config.TextColumn("File Name"),
+                        "Current Value": st.column_config.TextColumn("Current Value"),
+                        "Status": st.column_config.TextColumn("Status"),
+                    },
+                    hide_index=True,
+                    use_container_width=True,
+                )
+
+                if needs_update:
+                    if st.button("Update All ParentModPortId & Download", key="btn_update_pmpid"):
+                        replacement = 'ParentModPortId="{ParentModulePort}"'
+                        out_io = io.BytesIO()
+                        with zipfile.ZipFile(out_io, mode="w", compression=zipfile.ZIP_DEFLATED) as zout:
+                            for fname, content in pmpid_file_contents.items():
+                                cleaned = pmpid_pattern.sub(replacement, content)
+                                zout.writestr(fname, cleaned.encode("utf-8"))
+                        out_io.seek(0)
+
+                        st.success(f"Updated {len(needs_update)} ParentModPortId attribute(s) to '{{ParentModulePort}}'. Download below.")
+                        st.download_button(
+                            label="Download Updated HSL Files (ZIP)",
+                            data=out_io,
+                            file_name="updated_ParentModPortId_HSL_files.zip",
+                            mime="application/zip",
+                            key="download_zip_pmpid",
+                        )
+                else:
+                    st.success("All ParentModPortId attributes are already set to '{ParentModulePort}'. No changes needed.")
+            else:
+                st.info("No ParentModPortId attributes found in the uploaded files.")
+        else:
+            st.info("Upload Module-type HSL files to scan and update ParentModPortId attributes.")
 
 
 if __name__ == "__main__":
