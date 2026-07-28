@@ -5,6 +5,8 @@ from tools import ACM_HSL4_Attributes_Validator
 from tools import Naming_Conventions
 from tools import Optix_SVG_Path_Validator  # Import the new SVG validator tool
 from tools import ACM_Button_Converter
+from tools import FP_AOI_Tag_Validator
+from tools import UD_to_PD_Converter
 import base64
 
 TOOLS = {
@@ -12,8 +14,10 @@ TOOLS = {
     "ME to SE Converter": ME_to_SE_Converter,
     "ACM Attributes Validator": ACM_HSL4_Attributes_Validator,
     "Naming Conventions": Naming_Conventions,
-    "Optix SVG Path Validator": Optix_SVG_Path_Validator,  # Add the new tool
+    "Optix SVG Path Validator": Optix_SVG_Path_Validator,
     "ACM Launch Buttons Attachments Generator": ACM_Button_Converter,
+    "FP vs AOI Tag Validator": FP_AOI_Tag_Validator,
+    "NPDT AOI Def Generator": UD_to_PD_Converter,
 }
 
 tool_names = list(TOOLS.keys()) + ["Help / Documentation"]

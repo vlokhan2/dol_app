@@ -148,11 +148,17 @@ def convert_positions(xml_content: str, base_left: int, base_top: int) -> str:
     return result
 
 
-def update_parameters(xml_content: str, scope: str) -> str:
-    if scope.lower() == "program":
-        new_param = '<parameter name="#102" description="Add-On Instruction Backing Tag" value="{{AreaPath}}Program:{ProgramName}.{TagName}"/>'
+def update_parameters(xml_content: str, scope: str, platform: str = "SE") -> str:
+    if platform == "ME":
+        if scope.lower() == "program":
+            new_param = '<parameter name="#102" description="Add-On Instruction Backing Tag" value="{{AreaPathME}Program:{ProgramName}.{TagName}}"/>'
+        else:
+            new_param = '<parameter name="#102" description="Add-On Instruction Backing Tag" value="{{AreaPathME}{TagName}}"/>'
     else:
-        new_param = '<parameter name="#102" description="Add-On Instruction Backing Tag" value="{{AreaPath}}{TagName}"/>'
+        if scope.lower() == "program":
+            new_param = '<parameter name="#102" description="Add-On Instruction Backing Tag" value="{{AreaPath}Program:{ProgramName}.{TagName}}"/>'
+        else:
+            new_param = '<parameter name="#102" description="Add-On Instruction Backing Tag" value="{{AreaPath}{TagName}}"/>'
     return re.sub(r'<parameter\s+name="#102"[^/]*/>', new_param, xml_content)
 
 
@@ -172,7 +178,7 @@ def convert_button_xml(xml_content: str, scope: str = "program", base_offset: tu
     result = xml_content
     result = add_object_name_prefix(result)
     result = convert_positions(result, base_left, base_top)
-    result = update_parameters(result, scope)
+    result = update_parameters(result, scope, platform)
     result = format_xml(result)
 
     return {

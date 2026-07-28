@@ -246,6 +246,18 @@ def extract_inf_lib_type_from_files(uploaded_files):
                 if inf_type_elem is not None and inf_type_elem.text:
                     inf_type = inf_type_elem.text.strip().strip("'")
                 
+                # Extract Library value from extended properties (Librarys/Library)
+                ext_library = ""
+                ext_library_elem = tag.find("Librarys/Library")
+                if ext_library_elem is not None and ext_library_elem.text:
+                    ext_library = ext_library_elem.text.strip()
+                
+                # Extract Instruction value from extended properties (Instructions/Instruction)
+                ext_instruction = ""
+                ext_instruction_elem = tag.find("Instructions/Instruction")
+                if ext_instruction_elem is not None and ext_instruction_elem.text:
+                    ext_instruction = ext_instruction_elem.text.strip()
+                
                 # Only include tags that have Inf_Lib or Inf_Type (these are the relevant AOI tags)
                 if inf_lib or inf_type:
                     file_inf_data[uploaded_file.name]["tags"].append({
@@ -253,9 +265,13 @@ def extract_inf_lib_type_from_files(uploaded_files):
                         "Scope": scope_display,
                         "Inf_Lib": inf_lib,
                         "Inf_Type": inf_type,
+                        "ExtLibrary": ext_library,
+                        "ExtInstruction": ext_instruction,
                         "_tag_element": tag,
                         "_inf_lib_elem": inf_lib_elem,
-                        "_inf_type_elem": inf_type_elem
+                        "_inf_type_elem": inf_type_elem,
+                        "_ext_library_elem": ext_library_elem,
+                        "_ext_instruction_elem": ext_instruction_elem
                     })
                     
         except ET.XMLSyntaxError:
@@ -1036,6 +1052,7 @@ def main():
         - Validates `Inf_Lib` and `Inf_Type` tag attributes from **raC_LD** (Library Device) files only.
         - Asset-Control definition files are skipped (they don't contain these values).
         - When both Controller and Program scope tags exist, their `Inf_Lib` and `Inf_Type` values must match.
+        - Also validates that `Librarys > Library` (extended properties) matches `Inf_Lib` for each scope.
         - The 'Status Check' column shows ❌ for mismatches and ✅ when values match.
         """)
 
@@ -1059,8 +1076,12 @@ def main():
                             "File Name": file_name,
                             "Controller Inf_Lib": "",
                             "Controller Inf_Type": "",
+                            "Controller ExtProp Library": "",
+                            "Controller ExtProp Instruction": "",
                             "Program Inf_Lib": "",
                             "Program Inf_Type": "",
+                            "Program ExtProp Library": "",
+                            "Program ExtProp Instruction": "",
                             "Status Check": "⚠️",
                             "Issue Details": "No AOI tags with Inf_Lib/Inf_Type found"
                         })
@@ -1072,8 +1093,12 @@ def main():
                         # Get values (use first tag of each scope if multiple exist)
                         ctrl_inf_lib = controller_tags[0]["Inf_Lib"] if controller_tags else ""
                         ctrl_inf_type = controller_tags[0]["Inf_Type"] if controller_tags else ""
+                        ctrl_ext_library = controller_tags[0]["ExtLibrary"] if controller_tags else ""
+                        ctrl_ext_instruction = controller_tags[0]["ExtInstruction"] if controller_tags else ""
                         prog_inf_lib = program_tags[0]["Inf_Lib"] if program_tags else ""
                         prog_inf_type = program_tags[0]["Inf_Type"] if program_tags else ""
+                        prog_ext_library = program_tags[0]["ExtLibrary"] if program_tags else ""
+                        prog_ext_instruction = program_tags[0]["ExtInstruction"] if program_tags else ""
                         
                         issues = []
                         
@@ -1100,6 +1125,30 @@ def main():
                             if not prog_inf_type:
                                 issues.append("Program Inf_Type is empty")
                         
+                        # Validate Library (extended properties) matches Inf_Lib
+                        if controller_tags:
+                            if not ctrl_ext_library:
+                                issues.append("Controller Library (extended property) is empty")
+                            elif ctrl_ext_library != ctrl_inf_lib:
+                                issues.append(f"Controller Library mismatch: Library='{ctrl_ext_library}' vs Inf_Lib='{ctrl_inf_lib}'")
+                        if program_tags:
+                            if not prog_ext_library:
+                                issues.append("Program Library (extended property) is empty")
+                            elif prog_ext_library != prog_inf_lib:
+                                issues.append(f"Program Library mismatch: Library='{prog_ext_library}' vs Inf_Lib='{prog_inf_lib}'")
+                        
+                        # Validate Instruction (extended properties) matches Inf_Type
+                        if controller_tags:
+                            if not ctrl_ext_instruction:
+                                issues.append("Controller Instruction (extended property) is empty")
+                            elif ctrl_ext_instruction != ctrl_inf_type:
+                                issues.append(f"Controller Instruction mismatch: Instruction='{ctrl_ext_instruction}' vs Inf_Type='{ctrl_inf_type}'")
+                        if program_tags:
+                            if not prog_ext_instruction:
+                                issues.append("Program Instruction (extended property) is empty")
+                            elif prog_ext_instruction != prog_inf_type:
+                                issues.append(f"Program Instruction mismatch: Instruction='{prog_ext_instruction}' vs Inf_Type='{prog_inf_type}'")
+                        
                         status_check = "❌" if issues else "✅"
                         issue_details = "; ".join(issues) if issues else "All okay - values match"
                         
@@ -1107,8 +1156,12 @@ def main():
                             "File Name": file_name,
                             "Controller Inf_Lib": ctrl_inf_lib,
                             "Controller Inf_Type": ctrl_inf_type,
+                            "Controller ExtProp Library": ctrl_ext_library,
+                            "Controller ExtProp Instruction": ctrl_ext_instruction,
                             "Program Inf_Lib": prog_inf_lib,
                             "Program Inf_Type": prog_inf_type,
+                            "Program ExtProp Library": prog_ext_library,
+                            "Program ExtProp Instruction": prog_ext_instruction,
                             "Status Check": status_check,
                             "Issue Details": issue_details
                         })
@@ -1120,15 +1173,19 @@ def main():
                 if inf_data:
                     inf_df = pd.DataFrame(inf_data)
                     
-                    st.markdown("### Inf_Lib / Inf_Type Comparison (Controller vs Program)")
+                    st.markdown("### Inf_Lib / Inf_Type / Library Comparison (Controller vs Program)")
                     st.dataframe(
                         inf_df,
                         column_config={
                             "File Name": st.column_config.TextColumn("File Name"),
                             "Controller Inf_Lib": st.column_config.TextColumn("Controller Inf_Lib"),
                             "Controller Inf_Type": st.column_config.TextColumn("Controller Inf_Type"),
+                            "Controller ExtProp Library": st.column_config.TextColumn("Controller ExtProp Library"),
+                            "Controller ExtProp Instruction": st.column_config.TextColumn("Controller ExtProp Instruction"),
                             "Program Inf_Lib": st.column_config.TextColumn("Program Inf_Lib"),
                             "Program Inf_Type": st.column_config.TextColumn("Program Inf_Type"),
+                            "Program ExtProp Library": st.column_config.TextColumn("Program ExtProp Library"),
+                            "Program ExtProp Instruction": st.column_config.TextColumn("Program ExtProp Instruction"),
                             "Status Check": st.column_config.TextColumn("Status Check"),
                             "Issue Details": st.column_config.TextColumn("Issue Details")
                         },

@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^python -c \"\nwith open\\(r'C:\\\\Users\\\\VLokhan2\\\\OneDrive - Rockwell Automation, Inc\\\\Python\\\\tools_dashboard\\\\dol_app_root\\\\\\(RA-LIB\\)_Device_Device_PowerDiscrete_raC_LD_Dvc_10xE_INT_\\(4\\.2\\)\\.HSL4', 'r', encoding='utf-8'\\) as f:\n    content = f\\.read\\(\\)\nprint\\(f'File size: \\{len\\(content\\)\\} chars'\\)\n# Find AddOnInstructionDefinitions\nimport re\nm = re\\.search\\(r'<AddOnInstructionDefinitions>', content\\)\nif m:\n    print\\(f'Found AOI block at pos \\{m\\.start\\(\\)\\}'\\)\n    snippet = content\\[m\\.start\\(\\):m\\.start\\(\\)\\+2000\\]\n    print\\(snippet\\)\nelse:\n    print\\('No AddOnInstructionDefinitions found'\\)\n    # Check what tags exist\n    tags = set\\(re\\.findall\\(r'<\\(\\\\w\\+\\)', content\\[:5000\\]\\)\\)\n    print\\('Tags found:', sorted\\(tags\\)\\[:30\\]\\)\n\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

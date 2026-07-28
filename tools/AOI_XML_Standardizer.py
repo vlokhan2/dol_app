@@ -246,8 +246,8 @@ def main():
         
         if not revision_extension:
             reasons.append("RevisionExtension is required")
-        elif not re.match(r'^\.\d+$', revision_extension):
-            reasons.append("RevisionExtension must be in format .XX (e.g., .00)")
+        elif not re.match(r'^\.?\d+$', revision_extension):
+            reasons.append("RevisionExtension must be in format XX or .XX (e.g., 00 or .00)")
         
         if not vendor:
             reasons.append("Vendor is required")
@@ -558,6 +558,8 @@ def main():
             return "Inp_" + name_no_underscore[3:]
         elif name_no_underscore.startswith("Out"):
             return "Out_" + name_no_underscore[3:]
+        elif name_no_underscore.startswith("Cfg"):
+            return "Cfg_" + name_no_underscore[3:]
         else:
             return "Ref_" + name_no_underscore
 
@@ -683,6 +685,14 @@ def main():
         dtype = row.get("DataType", "")
 
         if original_name.startswith(("HMI_", "Inf_")):
+            return original_name, False, ""
+
+        # Exception list: local tags that are valid as-is (e.g. Read Only tags used for aliasing)
+        local_tag_exceptions = {
+            "Wrk_bSts",
+            "Sts_EventMessage",
+        }
+        if original_name in local_tag_exceptions:
             return original_name, False, ""
 
         suggestion = original_name
